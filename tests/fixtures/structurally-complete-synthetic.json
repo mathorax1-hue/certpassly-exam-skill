@@ -1,0 +1,30 @@
+{
+  "exam_code": "SYN-001",
+  "official_domains": ["learn.microsoft.com"],
+  "questions": [
+    {
+      "id": "sample-1",
+      "correct_answer": "A",
+      "accuracy_status": "key_matches_current_docs",
+      "human_review_required": false,
+      "evidence": [
+        {
+          "url": "https://learn.microsoft.com/en-us/purview/dlp-policy-reference",
+          "saved_page_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "verbatim_quote": "Synthetic evidence text for a test fixture only. Not a real quoted source.",
+          "supports_correct_answer": true
+        }
+      ]
+    }
+  ],
+  "media": [
+    {
+      "id": "img-1",
+      "role": "answer_reference",
+      "answer_verified": true,
+      "approved_for_release": true,
+      "reviewer_only": true,
+      "in_learner_payload": false
+    }
+  ]
+}

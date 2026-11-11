@@ -1,0 +1,23 @@
+{
+  "exam_code": "SYN-000",
+  "official_domains": ["learn.microsoft.com"],
+  "questions": [
+    {
+      "id": "sample-1",
+      "correct_answer": "A",
+      "accuracy_status": "key_could_not_be_checked",
+      "human_review_required": true,
+      "evidence": []
+    }
+  ],
+  "media": [
+    {
+      "id": "img-1",
+      "role": "answer_reference",
+      "answer_verified": false,
+      "approved_for_release": false,
+      "reviewer_only": true,
+      "in_learner_payload": false
+    }
+  ]
+}

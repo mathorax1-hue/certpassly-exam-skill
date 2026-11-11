@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "skill": "mathorax1-hue/certpassly-exam-skill",
+  "processor": "mathorax1-hue/exam",
+  "private_sources": "mathorax1-hue/raw-exam",
+  "private_releases": "mathorax1-hue/ready-exams",
+  "upstream": {
+    "repository": "msaqlainhaneef1/certpassly-exam-pipeline",
+    "reviewed_commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc",
+    "license_review": "No LICENSE file located in upstream root tree on 2026-11-12; do not vendor source files without permission"
+  },
+  "policy": {
+    "copy_private_exam_files_to_public": false,
+    "auto_promote_to_ready_exams": false,
+    "external_human_approval_required": true,
+    "private_exams_per_run_default": 1
+  }
+}

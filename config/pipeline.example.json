@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "note": "Synthetic demonstration only. Replace with private, reviewed stage plan before real exams.",
+  "stages": [
+    {
+      "name": "normalize_demo",
+      "command": ["{python}", "-m", "certpassly.demo", "--source", "tests/fixtures/pending-review.json", "--output", "work/demo/normalized.json"],
+      "inputs": ["tests/fixtures/pending-review.json"],
+      "outputs": ["work/demo/normalized.json"],
+      "needs": [],
+      "timeout_seconds": 30
+    },
+    {
+      "name": "audit_demo",
+      "command": ["{python}", "-m", "certpassly.cli", "verify-evidence", "--input", "work/demo/normalized.json", "--output", "work/demo/evidence-report.json"],
+      "inputs": ["work/demo/normalized.json"],
+      "outputs": ["work/demo/evidence-report.json"],
+      "needs": ["normalize_demo"],
+      "timeout_seconds": 30
+    }
+  ]
+}
