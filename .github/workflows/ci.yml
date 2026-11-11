@@ -1,0 +1,33 @@
+name: CertPassly Skill CI - synthetic only
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: skill-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run standard-library unit tests
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Verify CLI and deliberate release rejection
+        run: |
+          PYTHONPATH=src python -m certpassly.cli doctor --json
+          if PYTHONPATH=src python -m certpassly.cli verify-evidence --input tests/fixtures/pending-review.json --strict; then
+            echo 'ERROR: a pending review passed release evidence checks'
+            exit 1
+          fi
+      - name: Check public-repository file safety
+        run: python scripts/check_public_safety.py
