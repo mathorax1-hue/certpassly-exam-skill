@@ -43,7 +43,7 @@ jobs:
       - name: Remove one-time bootstrap helpers and check tracked files
         run: |
           rm -rf seed
-          rm -f .github/workflows/bootstrap.yml
+          rm -f .github/workflows/ci.yml
           git add -A
           python scripts/check_public_safety.py
       - name: Commit complete skill foundation
