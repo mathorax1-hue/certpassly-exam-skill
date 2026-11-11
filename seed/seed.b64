@@ -1,1 +1,1 @@
-source bundle chunks 01-09 SHA-verified; trigger one-time public bootstrap
+source bundle chunks 01-09 SHA-verified; re-trigger source-only bootstrap after workflow permissions fix
