@@ -2,7 +2,7 @@
 
 ## Preflight
 
-1. Read `AGENTS.md` and `SKILL.md`.
+1. Read `AGENTS.md`, `SKILL.md` and `docs/AI-SESSION-RECOVERY.md`. When authorized, read the private `raw-exam/docs/AI-SESSION-HANDOVER.md` to recover live exam-review progress.
 2. Confirm the target exam, source version, and private repository rights.
 3. Run `certpassly doctor` and ensure dependencies for the selected stage are available.
 4. Use `PYTHONPATH=src python -m unittest discover -s tests -v` before any shared code commit.
