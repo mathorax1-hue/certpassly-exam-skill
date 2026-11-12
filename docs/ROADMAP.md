@@ -33,6 +33,13 @@
 - [ ] Add robust package scanning for hidden answer keys in learner payloads.
 - [ ] Add full MCP transport tests and a version-pinned dependency lockfile.
 
+## Conversation recovery (2026-11-12)
+
+- [x] Preserve full existing private master history and embedded workflow evidence in ChatGPT Library version 3 and a private raw-exam JSON mirror; check current versions before future writes.
+- [x] Provide a tested standard-library append-only master history tool and public synthetic regression tests.
+- [x] Require a private master archive handover protocol and explicit GitHub/Library readback checks.
+- [ ] Any account-wide automatic ingestion of future ChatGPT chats is not deployed and should never be implied from repository instructions.
+
 ## v0.3 — controlled service rollout
 
 - [ ] Add protected private cross-repository reusable workflow with bounded `workflow_dispatch` inputs.
