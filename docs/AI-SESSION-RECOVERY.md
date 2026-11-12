@@ -66,6 +66,7 @@ For every meaningful incident, append under `knowledge/`: date; exact command/ru
 ## New reusable tools and tests (2026-11-12)
 
 - scripts/capture_official_source.py: bounded allowlisted HTTPS source download, exact-byte SHA-256, proof quote match and provenance status; tests/test_capture_official_source.py.
+- scripts/verify_saved_receipts.py: offline rehash and quote-check saved snapshots with validated allowlisted URL and honest origin status; tests/test_verify_saved_receipts.py.
 - scripts/audit_option_evidence.py: option-by-option rationale and source-field preflight, plus visual row-order checks; tests/test_audit_option_evidence.py.
 - scripts/reconcile_visual_roles.py: active/superseded owner screenshot role reconciliation and learner-answer visibility checks; tests/test_reconcile_visual_roles.py.
 - scripts/verify_tool_registry.py and config/tool-registry.json: enforce a single index of registered tools, dependencies and tests; tests/test_tool_registry.py.
