@@ -132,6 +132,17 @@
       "release_authority": false
     },
     {
+      "id": "saved_source_receipt_verifier",
+      "path": "scripts/verify_saved_receipts.py",
+      "test": "tests/test_verify_saved_receipts.py",
+      "command": "python scripts/verify_saved_receipts.py --private-dir PRIVATE/pages/ --allow-host learn.microsoft.com",
+      "dependencies": "stdlib; imports capture_official_source helper",
+      "side_effects": "read-only; optional private report",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "tool_registry_validator",
       "path": "scripts/verify_tool_registry.py",
       "test": "tests/test_tool_registry.py",
