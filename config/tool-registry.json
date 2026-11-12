@@ -179,12 +179,13 @@
       "id": "ledger_source_url_audit",
       "path": "scripts/audit_ledger_source_urls.py",
       "test": "tests/test_audit_ledger_source_urls.py",
-      "command": "python scripts/audit_ledger_source_urls.py --ledger PRIVATE/ledger.json --evidence-dir PRIVATE/pages/ --linkage PRIVATE/url-linkage.json --allow-host learn.microsoft.com --allow-host support.microsoft.com",
+      "command": "python scripts/audit_ledger_source_urls.py --ledger PRIVATE/ledger.json --evidence-dir PRIVATE/pages/ --linkage PRIVATE/url-linkage.json --allow-host learn.microsoft.com --allow-host support.microsoft.com [--evidence-field official_source_evidence_20261112]",
       "dependencies": "stdlib; imports capture_official_source helper",
-      "side_effects": "read-only; optional private report",
+      "side_effects": "read-only; optional private report; validates per-record evidence blocks fail-closed when present; no-blocks mode reports explicitly reduced assurance",
       "owner": "CertPassly Team",
       "scope": "shared",
-      "release_authority": false
+      "release_authority": false,
+      "description": "Fail-closed per-URL saved-source validator: every source_urls instance must have a byte-verified receipt+page (SHA-256, bytes, quote, allowlisted host, capture_mode downloaded); per-record ledger evidence blocks, when present, are validated against the byte-verified receipts (count, order, URL, receipt/page filename, SHA-256, bytes, timestamp, redirect target); the per-question linkage sidecar is bound to question id and URL with no unknown/orphan mappings; zero-URL ledgers never pass vacuously."
     }
   ]
 }
