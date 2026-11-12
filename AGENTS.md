@@ -15,6 +15,10 @@ Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `S
 9. Prioritize the current exam requested by the owner. Avoid unsolicited full private Actions runs; one exam per run by default.
 10. Follow least privilege. Do not modify workflows or private repository secrets without review of scope and behavior.
 
+## Mandatory private conversation-history archiving
+
+When the owner requests chat-history retention or at a manually approved handover, read docs/CONVERSATION-ARCHIVE-PROTOCOL.md. Update the existing PRIVATE master JSON in raw-exam/docs/conversation-history/ and the ChatGPT Library SAME path only if authorized and technically available. Preserve original history and embedded evidence; append only authenticated available messages, commands, failures, successes, links and next steps. Do not copy any private conversation contents into this public skill. Verify Git commit and Library version/bytes; never claim skipped messages were recovered. Use scripts/append_conversation_history.py and its synthetic tests.
+
 ## Permanent shared-skill stewardship
 
 This repository is the canonical writable home for CertPassly reusable scripts, tests, dependency decisions, AI handovers and sanitized technical lessons. Consult config/tool-registry.json and existing public processor code before writing another helper. Add regression tests and a documented dependency/side-effect model; verify public CI on the commit. Keep raw exam records, owner media, complete source snapshots, per-choice proofs and reviewer data in PRIVATE raw-exam.
