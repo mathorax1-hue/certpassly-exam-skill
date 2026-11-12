@@ -24,6 +24,10 @@
 
 The older public `msaqlainhaneef1/certpassly-exam-pipeline` remains a **pinned, external compatibility dependency** for its established processing stages where the private workflow still invokes it. It is no longer the requested repository for new skills, lessons, or scripts. Do not copy its code into this repository without appropriate reuse rights. A central skill repo is not automatically the runtime used by existing private GitHub Actions; every approved pin change needs an explicit test and audited commit.
 
+## Durable private chat history
+
+Before resuming, read docs/CONVERSATION-ARCHIVE-PROTOCOL.md and PRIVATE raw-exam/docs/conversation-history/certpassly_conversation_context_2026-11-12.json plus docs/AI-SESSION-HANDOVER.md. The Library master uses the same filename under /CertPassly/Conversation Archives/. Append new grounded, attributed conversation events to the same master via scripts/append_conversation_history.py, verify GitHub and Library writes separately, and do not invent missing historical messages. This is a manual process, not ongoing automatic chat capture.
+
 ## Reusable tool registry
 
 **Authoritative machine-readable registry:** `config/tool-registry.json` (check with `python scripts/verify_tool_registry.py`). **Full command and JSON schema guide:** `docs/TOOL-HUB.md`. The quick table below is introductory only and does not replace the registry.
