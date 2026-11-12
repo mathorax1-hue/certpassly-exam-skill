@@ -10,7 +10,7 @@ description: >-
 
 # CertPassly Exam Skill 2.0
 
-Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `docs/OPERATIONS.md` and **`docs/AI-SESSION-RECOVERY.md`** before processing real owner questions. Use this repository (`mathorax1-hue/certpassly-exam-skill`) as the canonical shared skill, scripts, dependency and lessons hub; do not write new skill updates to the older external upstream. Read upstream `SKILL.md` and `reference/lessons-learned.md` before running its pipeline.
+Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `knowledge/ENGINEERING-HISTORY.md`, `docs/OPERATIONS.md`, `docs/TOOL-HUB.md`, `docs/DEPENDENCIES.md`, `docs/INTEGRATION-PLAYBOOK.md` and **`docs/AI-SESSION-RECOVERY.md`** before processing real owner questions. Use this repository (`mathorax1-hue/certpassly-exam-skill`) as the canonical shared skill, scripts, dependency and lessons hub; do not write new skill updates to the older external upstream. Read upstream `SKILL.md` and `reference/lessons-learned.md` before running its pipeline.
 
 ## Default workflow
 
@@ -23,6 +23,14 @@ Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `docs/OPERATIONS.md` and **`docs
 7. Use `certpassly verify-evidence --input PATH --strict` for a **structural** check. An official URL or saved quote alone does not demonstrate that a specific answer is correct.
 8. Final import conformance, screenshot scoring, reviewer attestation, and protected approval remain **separate private gates**.
 9. Never promote, publish, or claim `100% ready` when any gate is unresolved.
+
+## Reuse-first tool discipline
+
+Treat this repository as the canonical source for new CertPassly scripts, tools, tests, dependency decisions and sanitized experience. Search the machine-readable registry at config/tool-registry.json and existing public processor before implementing a new helper. Every new tool must have synthetic tests, a dependency/side-effect description, public CI proof and a permanent incident/lesson record where relevant.
+
+New source-and-visual tooling includes scripts/capture_official_source.py, scripts/audit_option_evidence.py, scripts/audit_question_evidence.py, scripts/reconcile_visual_roles.py and scripts/unpack_artifact_tree.py. Their checks are **structural/provenance only**, not answer truth or independent human approval. Full invocation and schemas are in docs/TOOL-HUB.md.
+
+Run python scripts/verify_tool_registry.py and all unit tests before calling an engineering change complete. A green build does not imply any private exam has passed the release gates.
 
 ## Commands
 
