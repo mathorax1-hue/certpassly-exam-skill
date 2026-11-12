@@ -10,7 +10,14 @@
 - [x] Synthetic unit tests and a public CI workflow.
 - [x] Read-only optional MCP server source (runtime integration not yet tested).
 
-## v0.2 — planned, not implemented
+## 2026-11-12: reusable code integration completed (not release readiness)
+
+- [x] Migrate and test a fail-closed private review-ledger preflight (`scripts/audit_question_evidence.py`).
+- [x] Migrate and test a nested artifact-to-directory unpacker (`scripts/unpack_artifact_tree.py`).
+- [x] Document canonical scripts/handovers in `docs/AI-SESSION-RECOVERY.md` with public/private boundaries.
+- [ ] Integrate a verified official-document snapshot/choice-support adapter; get approval before changing private runtime pins.
+
+## v0.2 — planned beyond these helpers
 
 - [ ] Build private AB-900 read-only adapter to current `raw-exam` editorial schema.
 - [ ] Add actual official-document snapshots with HTTPS fetch, digest validation, option-level matching and source aging.
