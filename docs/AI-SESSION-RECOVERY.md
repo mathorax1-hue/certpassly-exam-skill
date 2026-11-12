@@ -6,7 +6,7 @@
 
 ## Resume sequence (every new session)
 
-1. Read `AGENTS.md`, `SKILL.md`, `README.md`, `docs/OPERATIONS.md`, `docs/WORKFLOW-CONTROL.md`, this file, and `knowledge/AB900-LESSONS.md`.
+1. Read `AGENTS.md`, `SKILL.md`, `README.md`, `docs/OPERATIONS.md`, `docs/WORKFLOW-CONTROL.md`, `docs/TOOL-HUB.md`, `docs/DEPENDENCIES.md`, `docs/INTEGRATION-PLAYBOOK.md`, this file, `knowledge/AB900-LESSONS.md` and `knowledge/ENGINEERING-HISTORY.md`.
 2. Read `config/repositories.json` and identify the actual **pinned** source revisions used by the private workflow; do not assume this repository's main branch is deployed automatically.
 3. For exam-specific progress, read **PRIVATE** `mathorax1-hue/raw-exam/docs/AI-SESSION-HANDOVER.md` and then the live evidence ledger and review checklist under `exams/AB-900/`. Authorized private access is required. Do not copy private content into this public repository.
 4. Compare current GitHub commits, relevant Actions runs, and protected release-gate results. Treat dated summaries as snapshots, not present truth.
@@ -25,6 +25,8 @@
 The older public `msaqlainhaneef1/certpassly-exam-pipeline` remains a **pinned, external compatibility dependency** for its established processing stages where the private workflow still invokes it. It is no longer the requested repository for new skills, lessons, or scripts. Do not copy its code into this repository without appropriate reuse rights. A central skill repo is not automatically the runtime used by existing private GitHub Actions; every approved pin change needs an explicit test and audited commit.
 
 ## Reusable tool registry
+
+**Authoritative machine-readable registry:** `config/tool-registry.json` (check with `python scripts/verify_tool_registry.py`). **Full command and JSON schema guide:** `docs/TOOL-HUB.md`. The quick table below is introductory only and does not replace the registry.
 
 | Tool | Purpose | Invocation | Dependencies | Provenance |
 | --- | --- | --- | --- | --- |
@@ -60,6 +62,16 @@ The user requested AB-900 before AI-103, with no weakening of blockers and no pr
 ## Failure record template
 
 For every meaningful incident, append under `knowledge/`: date; exact command/run; observed error; cause (confirmed vs suspected); fix and diff/commit; synthetic regression test; CI URL/result; blast radius/privacy check; whether private workflow pin changed; unresolved work. Never invent a fix or mark a task complete based on an unconfirmed CI run.
+
+## New reusable tools and tests (2026-11-12)
+
+- scripts/capture_official_source.py: bounded allowlisted HTTPS source download, exact-byte SHA-256, proof quote match and provenance status; tests/test_capture_official_source.py.
+- scripts/audit_option_evidence.py: option-by-option rationale and source-field preflight, plus visual row-order checks; tests/test_audit_option_evidence.py.
+- scripts/reconcile_visual_roles.py: active/superseded owner screenshot role reconciliation and learner-answer visibility checks; tests/test_reconcile_visual_roles.py.
+- scripts/verify_tool_registry.py and config/tool-registry.json: enforce a single index of registered tools, dependencies and tests; tests/test_tool_registry.py.
+- See knowledge/ENGINEERING-HISTORY.md for actual failures and confirmed fixes, and docs/DEPENDENCIES.md for approved tooling choices.
+
+These are metadata and source-byte tools, NOT automatic semantic key verification, real human signoff or ready-exams acceptance.
 
 ## Next safe engineering tasks
 
