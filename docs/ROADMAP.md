@@ -16,6 +16,7 @@
 - [x] Migrate and test a nested artifact-to-directory unpacker (`scripts/unpack_artifact_tree.py`).
 - [x] Document canonical scripts/handovers in `docs/AI-SESSION-RECOVERY.md` with public/private boundaries.
 - [x] Implement a bounded official-page capture helper with allowlisted HTTPS, SHA-256 and verified quote occurrence (provenance, not answer correctness).
+- [x] Add offline saved-page receipt verifier; detect hash tampering, quote changes, forged path traversal and unverified origin.
 - [x] Implement per-option source-field evidence preflight and matrix/dropdown row order checks.
 - [x] Implement active vs superseded original visual role reconciliation (metadata, not pixel proof).
 - [x] Register every shared tool in config/tool-registry.json and enforce it in public CI.
