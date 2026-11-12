@@ -1,6 +1,6 @@
 # CertPassly agent operating contract
 
-Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `SKILL.md`, `knowledge/AB900-LESSONS.md`, and `docs/OPERATIONS.md` before working on exams. For upstream runs read upstream `SKILL.md` and its exact versioned reference manual.
+Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `SKILL.md`, `knowledge/AB900-LESSONS.md`, `docs/OPERATIONS.md`, and **`docs/AI-SESSION-RECOVERY.md`** before working on exams. This repository is the canonical home for new shared scripts, tests, dependencies, and sanitized lessons; read the separate PRIVATE raw-exam handover for live item progress. For upstream runs read upstream `SKILL.md` and its exact versioned reference manual.
 
 ## Mandatory boundaries
 
