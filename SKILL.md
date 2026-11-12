@@ -24,6 +24,10 @@ Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `knowledge/ENGINEERING-HISTORY.m
 8. Final import conformance, screenshot scoring, reviewer attestation, and protected approval remain **separate private gates**.
 9. Never promote, publish, or claim `100% ready` when any gate is unresolved.
 
+## Conversation-history recovery (required for authorized handovers)
+
+Read docs/CONVERSATION-ARCHIVE-PROTOCOL.md and the private raw-exam master, not only the tool registry. All actual conversations, owner source and embedded evidence stay PRIVATE. Preserve the single existing master in-place via scripts/append_conversation_history.py, with preview, authenticated event provenance, explicit --apply, readback and matching private GitHub/Library copies when both are accessible. Recording conversation context is not model retraining or automatic account-wide export.
+
 ## Reuse-first tool discipline
 
 Treat this repository as the canonical source for new CertPassly scripts, tools, tests, dependency decisions and sanitized experience. Search the machine-readable registry at config/tool-registry.json and existing public processor before implementing a new helper. Every new tool must have synthetic tests, a dependency/side-effect description, public CI proof and a permanent incident/lesson record where relevant.
