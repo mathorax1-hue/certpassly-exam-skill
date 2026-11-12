@@ -16,6 +16,7 @@ From the repository root, with Python 3.11+:
 | python -m certpassly.cli verify-evidence --input PRIVATE/dossier.json --strict | Structural bank and learner-media privacy audit | Optional private output |
 | python scripts/audit_question_evidence.py PRIVATE/active-question-review-ledger.json | Preflight current private review ledger schema | No by default |
 | python scripts/audit_option_evidence.py --input PRIVATE/option-dossier.json | Check every selected option and distractor for source fields and order | No by default |
+| python scripts/verify_saved_receipts.py --private-dir PRIVATE/official-pages --allow-host learn.microsoft.com | Rehash saved pages and recheck receipt quotes without network | Read-only; optional private report |
 | python scripts/reconcile_visual_roles.py --input PRIVATE/visual-roles.json | Separate active and superseded screenshots; catch role and learner-safety errors | No by default |
 | python scripts/capture_official_source.py --help | Download and SHA-256-hash an allowlisted official page, verify proof quote | Private snapshots only |
 | python scripts/unpack_artifact_tree.py PRIVATE/archive.zip PRIVATE/unpacked | Expand nested artifact ZIP into folders with a checksummed file manifest | Private directories only |
