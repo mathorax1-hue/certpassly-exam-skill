@@ -10,7 +10,7 @@ description: >-
 
 # CertPassly Exam Skill 2.0
 
-Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, and `docs/OPERATIONS.md` before processing real owner questions. Read upstream `SKILL.md` and `reference/lessons-learned.md` before running its pipeline.
+Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `docs/OPERATIONS.md` and **`docs/AI-SESSION-RECOVERY.md`** before processing real owner questions. Use this repository (`mathorax1-hue/certpassly-exam-skill`) as the canonical shared skill, scripts, dependency and lessons hub; do not write new skill updates to the older external upstream. Read upstream `SKILL.md` and `reference/lessons-learned.md` before running its pipeline.
 
 ## Default workflow
 
