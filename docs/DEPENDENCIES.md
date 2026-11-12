@@ -1,6 +1,6 @@
 # Installation, dependency policy and reproducible execution
 
-The shared skill keeps the **core Python 3.11+ toolchain dependency-free**. Added source-capture, option evidence, role reconciliation, ledger preflight, nested archive extractor and registry validator use the Python standard library.
+The shared skill keeps the **core Python 3.11+ toolchain dependency-free**. Added source-capture, offline receipt verifier, option evidence, role reconciliation, ledger preflight, nested archive extractor and registry validator use the Python standard library.
 
 ## Supported execution targets
 
