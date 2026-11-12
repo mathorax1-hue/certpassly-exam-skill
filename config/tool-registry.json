@@ -174,6 +174,17 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "ledger_source_url_audit",
+      "path": "scripts/audit_ledger_source_urls.py",
+      "test": "tests/test_audit_ledger_source_urls.py",
+      "command": "python scripts/audit_ledger_source_urls.py --ledger PRIVATE/ledger.json --evidence-dir PRIVATE/pages/ --linkage PRIVATE/url-linkage.json --allow-host learn.microsoft.com --allow-host support.microsoft.com",
+      "dependencies": "stdlib; imports capture_official_source helper",
+      "side_effects": "read-only; optional private report",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }
