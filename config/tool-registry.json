@@ -99,17 +99,6 @@
       "release_authority": false
     },
     {
-      "id": "option_review_audit",
-      "path": "scripts/audit_option_evidence.py",
-      "test": "tests/test_audit_option_evidence.py",
-      "command": "python scripts/audit_option_evidence.py --input PRIVATE/review.json",
-      "dependencies": "stdlib",
-      "side_effects": "read-only; optional private report",
-      "owner": "CertPassly Team",
-      "scope": "shared",
-      "release_authority": false
-    },
-    {
       "id": "pinned_upstream_adapter",
       "path": "src/certpassly/upstream.py",
       "test": "tests/test_upstream.py",
