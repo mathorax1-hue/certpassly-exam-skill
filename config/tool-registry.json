@@ -22,6 +22,17 @@
       "release_authority": false
     },
     {
+      "id": "conversation_history_append",
+      "path": "scripts/append_conversation_history.py",
+      "test": "tests/test_append_conversation_history.py",
+      "command": "python scripts/append_conversation_history.py --private-master PRIVATE/master.json --event-batch PRIVATE/new-events.json [--apply]",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Preview by default; --apply atomically updates the ONE existing private master JSON in place; no network or public upload",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "environment_doctor",
       "path": "src/certpassly/doctor.py",
       "test": "tests/test_cli.py",
