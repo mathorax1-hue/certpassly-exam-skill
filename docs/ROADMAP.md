@@ -15,13 +15,19 @@
 - [x] Migrate and test a fail-closed private review-ledger preflight (`scripts/audit_question_evidence.py`).
 - [x] Migrate and test a nested artifact-to-directory unpacker (`scripts/unpack_artifact_tree.py`).
 - [x] Document canonical scripts/handovers in `docs/AI-SESSION-RECOVERY.md` with public/private boundaries.
-- [ ] Integrate a verified official-document snapshot/choice-support adapter; get approval before changing private runtime pins.
+- [x] Implement a bounded official-page capture helper with allowlisted HTTPS, SHA-256 and verified quote occurrence (provenance, not answer correctness).
+- [x] Implement per-option source-field evidence preflight and matrix/dropdown row order checks.
+- [x] Implement active vs superseded original visual role reconciliation (metadata, not pixel proof).
+- [x] Register every shared tool in config/tool-registry.json and enforce it in public CI.
+- [x] Add dependency guidance, four-repo playbook, centralized failure/pass history, and AI recovery instructions.
+- [ ] Verify live option correctness against captured official documents and original PDF in the private workspace; preserve human signoff gates.
+- [ ] Review and explicitly update private runtime pins only when the integrated skill is compatible and tested.
 
 ## v0.2 — planned beyond these helpers
 
 - [ ] Build private AB-900 read-only adapter to current `raw-exam` editorial schema.
-- [ ] Add actual official-document snapshots with HTTPS fetch, digest validation, option-level matching and source aging.
-- [ ] Support image cross-reference reconciliation using PyMuPDF/OpenCV and unmarked-versus-marked screenshot evidence.
+- [ ] Complete source-content-to-per-option authenticity checks, proof-quote archival, source aging, and independent key adjudication in private; capture helper is available but production verification is incomplete.
+- [ ] Implement real PDF/pixel image alignment with PyMuPDF/OpenCV and semantic screenshot answer review; metadata reconciliation exists.
 - [ ] Add a real import-format compatibility test from the approved site-format version.
 - [ ] Add robust package scanning for hidden answer keys in learner payloads.
 - [ ] Add full MCP transport tests and a version-pinned dependency lockfile.
