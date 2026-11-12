@@ -8,7 +8,7 @@ A reusable **scripts-first, evidence-first** toolkit for CertPassly exam process
 
 This repository is the **canonical** home for new reusable CertPassly tools, tests, dependency guidance and sanitized failure/pass history. Read the [machine-readable registry](config/tool-registry.json) before building a new helper; public CI now validates registry entries and all synthetic tests. Real owner PDFs, keys, original screenshots, downloaded official pages and per-question evidence remain private.
 
-- [Tool hub and evidence schemas](docs/TOOL-HUB.md): exact commands for official source capture, option-by-option audits, visual role reconciliation, ledger preflight and artifact archive organization.
+- [Tool hub and evidence schemas](docs/TOOL-HUB.md): exact commands for official source capture, offline receipt verification, option-by-option audits, visual role reconciliation, ledger preflight and artifact archive organization.
 - [Dependencies and installation](docs/DEPENDENCIES.md): core Python 3.11+, optional PDF, visual, browser, MCP and developer extras.
 - [Four-repo integration playbook](docs/INTEGRATION-PLAYBOOK.md): private verification, raw-to-ready gates, rollback and no publication.
 - [Engineering history](knowledge/ENGINEERING-HISTORY.md): observed failures, tested fixes, CI links, open gaps and permanent safeguards.
