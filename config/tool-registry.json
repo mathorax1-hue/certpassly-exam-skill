@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "canonical_repository": "mathorax1-hue/certpassly-exam-skill",
+  "visibility": "public",
+  "rules": {
+    "all_public_tests_synthetic": true,
+    "no_owner_pdf_key_or_screenshot": true,
+    "real_evidence_private_only": true,
+    "no_auto_promotion": true,
+    "independent_reviewer_required": true
+  },
+  "tools": [
+    {
+      "id": "environment_doctor",
+      "path": "src/certpassly/doctor.py",
+      "test": "tests/test_cli.py",
+      "command": "CLI doctor",
+      "dependencies": "stdlib",
+      "side_effects": "none",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "resumable_pipeline",
+      "path": "src/certpassly/pipeline.py",
+      "test": "tests/test_pipeline.py",
+      "command": "CLI run/status",
+      "dependencies": "stdlib",
+      "side_effects": "local checkpoints",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "evidence_bank_structural",
+      "path": "src/certpassly/evidence.py",
+      "test": "tests/test_evidence.py",
+      "command": "CLI verify-evidence",
+      "dependencies": "stdlib",
+      "side_effects": "read-only",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "pinned_upstream_adapter",
+      "path": "src/certpassly/upstream.py",
+      "test": "tests/test_upstream.py",
+      "command": "CLI upstream-run",
+      "dependencies": "git, python3",
+      "side_effects": "private work may be read",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "mcp_diagnostics",
+      "path": "src/certpassly/mcp_server.py",
+      "test": "tests/test_cli.py",
+      "command": "certpassly-mcp",
+      "dependencies": "optional mcp",
+      "side_effects": "read-only",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "ledger_preflight",
+      "path": "scripts/audit_question_evidence.py",
+      "test": "tests/test_audit_question_evidence.py",
+      "command": "python scripts/audit_question_evidence.py",
+      "dependencies": "stdlib",
+      "side_effects": "read-only; optional private report",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "artifact_tree_unpack",
+      "path": "scripts/unpack_artifact_tree.py",
+      "test": "tests/test_unpack_artifact_tree.py",
+      "command": "python scripts/unpack_artifact_tree.py",
+      "dependencies": "stdlib",
+      "side_effects": "local directories and SHA manifest",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "official_source_capture",
+      "path": "scripts/capture_official_source.py",
+      "test": "tests/test_capture_official_source.py",
+      "command": "python scripts/capture_official_source.py",
+      "dependencies": "stdlib; HTTPS network or offline file",
+      "side_effects": "private evidence snapshot",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "option_and_matrix_review",
+      "path": "scripts/audit_option_evidence.py",
+      "test": "tests/test_audit_option_evidence.py",
+      "command": "python scripts/audit_option_evidence.py",
+      "dependencies": "stdlib",
+      "side_effects": "read-only; optional private report",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "public_file_safety",
+      "path": "scripts/check_public_safety.py",
+      "test": "tests/test_cli.py",
+      "command": "python scripts/check_public_safety.py",
+      "dependencies": "stdlib; git",
+      "side_effects": "read-only tracked files",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "external_source_checkout",
+      "path": "scripts/bootstrap_upstream.sh",
+      "test": "tests/test_upstream.py",
+      "command": "bash scripts/bootstrap_upstream.sh",
+      "dependencies": "git; bash; HTTPS network",
+      "side_effects": "ignored vendor checkout",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    }
+  ]
+}
