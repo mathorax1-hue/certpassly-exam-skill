@@ -32,7 +32,7 @@ Reference: https://github.com/mathorax1-hue/raw-exam/actions/runs/43071568426 (p
 
 **Root cause:** A link or an AI justification is not itself a downloadable, hash-verified source snapshot, a complete option-by-option rationale or an accountable approval.
 
-**Prevention tools:** scripts/capture_official_source.py (HTTPS allowlist, max-size, SHA-256, exact quote-in-visible-page check, distinguishing downloaded vs offline origin); scripts/audit_option_evidence.py (all original options, rationale, source fields, rows); scripts/audit_question_evidence.py (private ledger preflight). All operate fail-closed and **do not** approve an answer.
+**Prevention tools:** scripts/capture_official_source.py (HTTPS allowlist, max-size, SHA-256, exact quote-in-visible-page check, distinguishing downloaded vs offline origin); scripts/verify_saved_receipts.py (offline rehash and quote check from saved bytes, no fabricated origin); scripts/audit_option_evidence.py (all original options, rationale, source fields, rows); scripts/audit_question_evidence.py (private ledger preflight). All operate fail-closed and **do not** approve an answer.
 
 **Open:** download real official pages privately, check every option, original images, conflicts and evidence; re-run independent release only after full eligible batch.
 
