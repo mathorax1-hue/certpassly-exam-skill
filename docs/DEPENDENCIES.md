@@ -38,6 +38,58 @@ The syntax above works in a Unix shell. In PowerShell, assign PYTHONPATH with: $
 
 System tools: git for versioning and pinned checkouts; Poppler pdfinfo/pdftoppm for PDF stages; gh optionally for authorized bounded dispatch; Docker and uv are optional. Use certpassly doctor to determine availability.
 
+## Persistent developer environments and reusable installation (owner directive, 2026-11-12)
+
+**Goal:** Install once when the environment is correct, then reuse it. Git tracks **source, manifests, commands, tests and provenance**, not a copied Python virtual environment or system binaries. The developer's existing secure workstation/VM/server is the primary build and synthetic-test environment. GitHub Actions is optional for synthetic corroboration; protected checks remain required where the release contract calls for them.
+
+### First run versus every later session
+
+1. **First run**: clone the public skill, create a Python 3.11+ virtual environment in that checkout, install the editable package with only the extras actually needed, run \`certpassly doctor --json\`, registry verification and synthetic tests. Install Git/Poppler/Tesseract only if absent. Record interpreter version, package versions, OS and exact Git SHA.
+2. **Later sessions**: return to the same checkout and activate the **existing** \`.venv\`. Do not delete/recreate it. Run \`certpassly doctor --json\` (if available), \`python scripts/verify_tool_registry.py\`, and only the tests relevant to changed code, plus full synthetic tests before acceptance.
+3. **Only repair what changed**: rerun \`python -m pip install -e .\` only when the package/dependency metadata or environment has changed, when a package is missing, or when verification fails. Source edits in an already editable checkout normally do not require reinstalling. Avoid unconditional \`pip install -U\` or switching to unreviewed latest upstream.
+4. **Preserve package download caches locally**: pip maintains its own cache (inspect with \`python -m pip cache dir\`); \`uv\` may also cache interpreters/packages when installed. Reuse those trusted local caches without checking them into Git. Keep project virtual environments isolated, particularly the legacy upstream's dependencies versus this newer skill's optional extras.
+5. **Retain the upstream checkout**: \`scripts/bootstrap_upstream.sh\` already downloads the approved legacy revision into an ignored \`vendor/\` location and refuses to overwrite an existing destination. Call it only when the checkout is absent. On later sessions inspect \`git -C vendor/certpassly-exam-pipeline rev-parse HEAD\` and confirm \`13dea6bab662ab1c4bbf87017e912e519907c8bc\`. If missing/wrong, stop and report; do not silently update or delete a checkout.
+6. **Rebuild when necessary**: if OS, architecture, interpreter ABI, pinned dependency set, Python version or the reviewed upstream revision changes, create a **new** isolated environment and verify it. Never copy \`.venv\` from one incompatible machine to another to simulate reproducibility.
+7. **Diagnose without leaking secrets**: record sanitized versions, \`python -m pip check\`, \`certpassly doctor --json\`, package/test results and manifest hashes. Do not publish an entire raw environment dump with tokens, home paths, private package indexes, user names or private URL credentials.
+
+### Useful session commands (Bash; existing compatible checkout)
+
+\`\`\`bash
+cd /path/to/certpassly-exam-skill
+source .venv/bin/activate                    # create only if absent
+python --version
+python -m pip check                          # inspect dependency consistency
+certpassly doctor --json
+python scripts/verify_tool_registry.py
+PYTHONPATH=src python -m unittest discover -s tests -v  # full pre-merge check
+git -C vendor/certpassly-exam-pipeline rev-parse HEAD    # if pinned checkout exists
+\`\`\`
+
+PowerShell: \`.\.venv\Scripts\Activate.ps1\`; use \`$env:PYTHONPATH="src"\` for tests. If a virtual environment is not present, follow **Core installation** above. Keep shell activation paths and private workspaces outside public tracked output.
+
+### Source-controlled reproducibility (what we retain in the public skill)
+
+| Retain in this PUBLIC repository | Keep installed or cached locally (never commit) |
+| --- | --- |
+| Reusable \`scripts/\` and \`src/certpassly/\` implementations, reviewed with synthetic tests | \`.venv/\`, Python distributions, compiled wheels, \`__pycache__/\`, local \`uv\` / pip caches |
+| \`pyproject.toml\` extras and reviewed package/version policies; an approved constraints/lock artifact **if later created and tested** | Third-party installed site-packages, browser binaries, OS packages, Docker images |
+| \`config/tool-registry.json\`: command, owner, dependency and side-effect contract for every shared tool | Local \`vendor/\` checkout of the external proprietary runtime; do not vendor its source |
+| \`config/repositories.json\` and reviewed upstream commit pins, bootstrap commands, synthetic fixtures and CI definitions | Original exam PDFs, answer keys, screenshots, private official-page captures, credentials, full local workspaces |
+| \`docs/DEPENDENCIES.md\`, \`docs/TOOL-HUB.md\`, \`knowledge/ENGINEERING-HISTORY.md\` and sanitized installation failure/recovery notes | Secrets in \`.env\`, temporary output, proprietary packages and confidential logs |
+
+The current \`pyproject.toml\` specifies dependency **ranges**, not a reviewed cross-platform lockfile. Never claim bit-for-bit reproducibility from ranges alone. Before creating a lock/constraints file, the developer must propose a scoped dependency change, compare existing manifests and registry, review licensing and security, run synthetic tests across supported targets, describe rollback, and request director/owner approval. Do not commit an unreviewed \`pip freeze\` from a personal workstation as a canonical lock.
+
+### How the developer adds a reusable capability (no duplicate tools)
+
+1. Search \`config/tool-registry.json\`, \`scripts/\`, \`src/certpassly/\`, the public \`exam\` processor, and \`docs/TOOL-HUB.md\` **before** writing anything.
+2. Extend an existing tool where possible. Otherwise propose a reusable general-purpose implementation in this skill, with synthetic test(s), a registry entry, precise dependencies and known writes/side effects.
+3. Add only necessary optional dependencies to \`pyproject.toml\`; **do not install all optional extras** by default. Keep the core standard-library-only when feasible.
+4. Validate locally and preserve exact test commands/outcomes; then use owner-public synthetic CI only when warranted. Explain why a new dependency or script is needed instead of reusing a listed tool.
+5. Keep private exam-specific configuration, evidence and generated artifacts in \`raw-exam\`; keep independent release validation in \`ready-exams\`. No public owner data, credentials, proprietary binary dumps or automatic promotion.
+6. Record tested tool changes and troubleshooting in the tool registry, this file and sanitized engineering history; show commit and test evidence to the director in the private GitHub discussion before proposing private integration.
+
+**Current task boundary:** This documents the reusable setup policy. It does **not** authorize the developer to alter runtime pins, introduce new dependency locks or bootstrap code, change Actions/secrets, publish or process real exams under a read-only audit order. Such work needs its own scoped developer order and review.
+
 ## Version and supply-chain rules
 
 1. Python requirement is >=3.11. Prefer standard-library tooling for new core scripts.
