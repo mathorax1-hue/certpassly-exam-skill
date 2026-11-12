@@ -1,8 +1,20 @@
-# CertPassly Exam Skill 2.0 — initial foundation (v0.1.0)
+# CertPassly shared skill hub (core v0.1.0 + tested reusable utilities)
 
 A reusable **scripts-first, evidence-first** toolkit for CertPassly exam processing. This repository is PUBLIC and must never contain owner PDFs, answer keys, credentials, raw screenshots, private artifacts, or human approval tokens.
 
 > **Status:** Tested foundation, not a finished production exam verifier. The evidence audit checks the *structure* of official-source records and image-release metadata; it does **not** independently verify answer truth or certify independent review. Production promotion is intentionally absent from this public repository.
+
+## Reusable tools, dependencies and lessons
+
+This repository is the **canonical** home for new reusable CertPassly tools, tests, dependency guidance and sanitized failure/pass history. Read the [machine-readable registry](config/tool-registry.json) before building a new helper; public CI now validates registry entries and all synthetic tests. Real owner PDFs, keys, original screenshots, downloaded official pages and per-question evidence remain private.
+
+- [Tool hub and evidence schemas](docs/TOOL-HUB.md): exact commands for official source capture, option-by-option audits, visual role reconciliation, ledger preflight and artifact archive organization.
+- [Dependencies and installation](docs/DEPENDENCIES.md): core Python 3.11+, optional PDF, visual, browser, MCP and developer extras.
+- [Four-repo integration playbook](docs/INTEGRATION-PLAYBOOK.md): private verification, raw-to-ready gates, rollback and no publication.
+- [Engineering history](knowledge/ENGINEERING-HISTORY.md): observed failures, tested fixes, CI links, open gaps and permanent safeguards.
+- [AI session recovery](docs/AI-SESSION-RECOVERY.md): new-session restart order and private handover pointer.
+
+**These tools document and safeguard evidence; they cannot independently establish answer truth or authorize human review.** Older upstream pipeline code remains a separately pinned compatibility dependency where the private workflow still uses it.
 
 ## What works now
 
