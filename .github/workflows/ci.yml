@@ -29,5 +29,9 @@ jobs:
             echo 'ERROR: a pending review passed release evidence checks'
             exit 1
           fi
+      - name: Verify reusable tool registry and compile shared Python
+        run: |
+          python scripts/verify_tool_registry.py
+          python -m compileall -q scripts src
       - name: Check public-repository file safety
         run: python scripts/check_public_safety.py
