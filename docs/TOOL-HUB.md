@@ -4,6 +4,10 @@
 
 This is the single catalog for new reusable CertPassly tools. Before writing any new tool, search [config/tool-registry.json](../config/tool-registry.json), relevant modules under src/certpassly/, scripts/, and the test suite. Avoid duplicate implementations. A command must have synthetic regression tests, documented dependencies, and a known failure mode.
 
+## Private conversation master archiving
+
+The reusable script scripts/append_conversation_history.py receives an existing private master and a provenance-marked event batch. Run a preview first, then --apply to atomically append to the SAME file. See docs/CONVERSATION-ARCHIVE-PROTOCOL.md for exact commands and post-commit/library verification. Do not add confidential master JSON to this public repo.
+
 ## Core commands
 
 From the repository root, with Python 3.11+:
