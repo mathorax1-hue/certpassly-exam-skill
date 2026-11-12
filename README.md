@@ -4,6 +4,10 @@ A reusable **scripts-first, evidence-first** toolkit for CertPassly exam process
 
 > **Status:** Tested foundation, not a finished production exam verifier. The evidence audit checks the *structure* of official-source records and image-release metadata; it does **not** independently verify answer truth or certify independent review. Production promotion is intentionally absent from this public repository.
 
+## Private master conversation history
+
+The [conversation archive protocol](docs/CONVERSATION-ARCHIVE-PROTOCOL.md) documents how to update the SAME private conversation-history JSON in ChatGPT Library and private raw-exam, with verified GitHub hashes, synthetic append-only tooling, and an explicit boundary against fictitious or inaccessible chat messages. The permanent private archive is NEVER committed here.
+
 ## Reusable tools, dependencies and lessons
 
 This repository is the **canonical** home for new reusable CertPassly tools, tests, dependency guidance and sanitized failure/pass history. Read the [machine-readable registry](config/tool-registry.json) before building a new helper; public CI now validates registry entries and all synthetic tests. Real owner PDFs, keys, original screenshots, downloaded official pages and per-question evidence remain private.
