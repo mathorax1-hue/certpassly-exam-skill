@@ -1,6 +1,6 @@
 # CertPassly agent operating contract
 
-Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `SKILL.md`, `knowledge/AB900-LESSONS.md`, `docs/OPERATIONS.md`, and **`docs/AI-SESSION-RECOVERY.md`** before working on exams. This repository is the canonical home for new shared scripts, tests, dependencies, and sanitized lessons; read the separate PRIVATE raw-exam handover for live item progress. For upstream runs read upstream `SKILL.md` and its exact versioned reference manual.
+Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `SKILL.md`, `knowledge/AB900-LESSONS.md`, `knowledge/ENGINEERING-HISTORY.md`, `docs/OPERATIONS.md`, `docs/TOOL-HUB.md`, `docs/INTEGRATION-PLAYBOOK.md`, and **`docs/AI-SESSION-RECOVERY.md`** before working on exams. This repository is the canonical home for new shared scripts, tests, dependencies, and sanitized lessons; read the separate PRIVATE raw-exam handover for live item progress. For upstream runs read upstream `SKILL.md` and its exact versioned reference manual.
 
 ## Mandatory boundaries
 
@@ -14,6 +14,12 @@ Every AI agent (ChatGPT, Claude, Gemini, Codex, Copilot and others) must read `S
 8. Each new confirmed bug needs: observed failure, cause, patch, test, reproduction command, and resolution status in `knowledge/`.
 9. Prioritize the current exam requested by the owner. Avoid unsolicited full private Actions runs; one exam per run by default.
 10. Follow least privilege. Do not modify workflows or private repository secrets without review of scope and behavior.
+
+## Permanent shared-skill stewardship
+
+This repository is the canonical writable home for CertPassly reusable scripts, tests, dependency decisions, AI handovers and sanitized technical lessons. Consult config/tool-registry.json and existing public processor code before writing another helper. Add regression tests and a documented dependency/side-effect model; verify public CI on the commit. Keep raw exam records, owner media, complete source snapshots, per-choice proofs and reviewer data in PRIVATE raw-exam.
+
+Do not claim the AI has automatically learned or been trained by reading these files; new sessions must actually read the documented handover. Do not assume a new skill commit automatically changes the old pipeline's pinned runtime. Independent reviewer approval and promotion remain separate private gates.
 
 ## Operator loop
 
