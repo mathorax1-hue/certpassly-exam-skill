@@ -59,7 +59,7 @@ The private workspace must have the config/source files required by upstream, as
 
 The release authority must remain in a protected private GitHub environment, not in AI-produced JSON or an MCP tool.
 
-Read [`SKILL.md`](SKILL.md), [`AGENTS.md`](AGENTS.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), and [`knowledge/AB900-LESSONS.md`](knowledge/AB900-LESSONS.md).
+Read [`SKILL.md`](SKILL.md), [`AGENTS.md`](AGENTS.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), and [`knowledge/AB900-LESSONS.md`](knowledge/AB900-LESSONS.md). **New AI sessions must begin with the [canonical recovery and reusable-tool registry](docs/AI-SESSION-RECOVERY.md)** and the private handover linked from it. This repository is now the requested destination for all new shared skills, tooling, tests, and sanitized failure lessons.
 
 ## Future work
 
