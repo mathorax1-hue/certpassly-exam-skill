@@ -1546,6 +1546,110 @@ def scenario_run_all_output_inventory_gate():
     report("run_all_resume_verifies_output_inventories", ok, detail)
 
 
+def scenario_run_all_exact_inventory_gate():
+    """Director final correction 3 (2026-11-13), P0: the checkpoint must be an
+    EXACT FILE-SET receipt. Over a REAL completed run_all pass (real stages,
+    real question JSON / asset / report artifacts), injecting an EXTRA file -
+    a new questions/q999.json, a stray answer asset, a rogue file in the
+    pinned upstream output - must make --resume AND --start-from REFUSE with
+    exit 3 before any stage runs, while a lawful partial resume (later-stage
+    artifacts left on disk, to be regenerated) stays allowed. P1: a partial
+    --start-from resume must preserve the COMPLETE stage list (skipped-stage
+    receipts carried, no double-counting) so a repeated partial resume chains
+    and the final --resume is a verified no-op - never a false green."""
+    pdf = f"{A.base}/exact-inventory.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=792, height=612)
+    std_question(p1, 1, "Which synthetic option survives the exact inventory?")
+    img_rect = fitz.Rect(560, 70, 740, 240)
+    p1.insert_image(img_rect, stream=png_bytes(160, 150, lambda d: d.rectangle(
+        [10, 10, 150, 140], fill=(30, 160, 60), outline="black")))
+    doc.save(pdf)
+    orig = open(pdf, "rb").read()
+    sha = hashlib.sha256(orig).hexdigest()
+
+    r, out = run_pinned(pdf, "SYN-XI")
+    out_dir = f"{A.base}/structured/SYN-XI"
+    os.makedirs(out_dir, exist_ok=True)
+    subprocess.run(_engine_cmd("make_pmap") + [pdf,
+                    f"{A.base}/workspace/out/SYN-XI/media/src", f"{A.base}/pmap-SYN-XI.json"],
+                   capture_output=True, text=True)
+    cfgp = make_config("SYN-XI", pdf, out_dir, sha)
+    rb = subprocess.run(_engine_cmd("build_structured_v1") + [cfgp],
+                        capture_output=True, text=True)
+    ok, detail = rb.returncode == 0, f"builder exit {rb.returncode}"
+    if ok:
+        _patch_config(cfgp, expected=_derive_expected(out_dir),
+                      manifest={"pdf_repo_path": pdf, "extract_log_line": "synthetic adversarial",
+                                "inventory": [], "immutability_untouched": [], "immutability_added": []})
+
+        def runall(*extra):
+            return subprocess.run([sys.executable, "-m", "certpassly.phase1.run_all",
+                                   "--config", cfgp, "--upstream-scripts", A.upstream,
+                                   "--skip-adversarial", *extra],
+                                  capture_output=True, text=True)
+
+        ckpt = f"{A.base}/run-checkpoint.json"  # written next to the config
+        r_full = runall()
+        ok = r_full.returncode == 0
+        detail = f"full run exit {r_full.returncode}"
+        if ok:
+            # P0 negatives: inject EXTRA untracked files one at a time
+            q999 = f"{out_dir}/questions/q999.json"
+            stray = f"{out_dir}/assets/untracked-answer.png"
+            rogue_up = f"{A.base}/workspace/out/SYN-XI/extracted/rogue-split.json"
+            r_extra_q = None
+            with open(q999, "w") as f:
+                json.dump({"question_id": "q999", "injected": True}, f)
+            r_extra_q = runall("--resume")
+            r_extra_q_sf = runall("--start-from", "reconcile")
+            os.unlink(q999)
+            with open(stray, "wb") as f:
+                f.write(b"untracked-answer-image-bytes-never-extracted")
+            r_extra_asset = runall("--resume")
+            os.unlink(stray)
+            os.makedirs(os.path.dirname(rogue_up), exist_ok=True)
+            with open(rogue_up, "w") as f:
+                json.dump({"rogue": True}, f)
+            r_extra_up = runall("--resume")
+            os.unlink(rogue_up)
+            # P0 positive: lawful partial resume keeps working (later-stage
+            # artifacts on disk are regenerated, not refused)
+            r_sf_ok = runall("--start-from", "reconcile")
+            # P1: the checkpoint after the partial resume carries the COMPLETE
+            # ordered stage list with preserved skipped-stage receipts
+            c2 = json.loads(open(ckpt).read()) if os.path.exists(ckpt) else {}
+            stage_list = [s.get("stage") for s in c2.get("stages", [])]
+            complete = stage_list == ["audit_source", "build_structured_v1",
+                                      "build_exports", "make_source_manifest",
+                                      "validate_structured_v1", "reconcile",
+                                      "visual_qa"]
+            no_dupes = len(stage_list) == len(set(stage_list))
+            carried = all(s.get("skipped_this_run") and s.get("exit_code") == 0
+                          and isinstance(s.get("outputs"), list)
+                          for s in c2.get("stages", [])[:5])
+            # P1: repeated partial resume chains (would refuse if receipts
+            # were dropped), then the final --resume is a verified no-op
+            r_chain = runall("--start-from", "visual_qa")
+            r_final = runall("--resume")
+            ok = (r_extra_q.returncode == 3 and r_extra_q_sf.returncode == 3
+                  and r_extra_asset.returncode == 3 and r_extra_up.returncode == 3
+                  and "unexpected_output_files" in r_extra_q.stderr
+                  and "q999.json" in r_extra_q.stderr
+                  and r_sf_ok.returncode == 0
+                  and complete and no_dupes and carried
+                  and r_chain.returncode == 0 and r_final.returncode == 0)
+            detail = (f"extra-q999 resume {r_extra_q.returncode}/start-from "
+                      f"{r_extra_q_sf.returncode}; extra-asset "
+                      f"{r_extra_asset.returncode}; extra-upstream "
+                      f"{r_extra_up.returncode}; lawful start-from "
+                      f"{r_sf_ok.returncode}; complete-stage-list {complete} "
+                      f"no-dupes {no_dupes} carried-receipts {carried}; "
+                      f"chained start-from {r_chain.returncode}; final "
+                      f"resume-noop {r_final.returncode}")
+    report("run_all_exact_inventory_and_receipt_preservation", ok, detail)
+
+
 def main():
     global A
     ap = argparse.ArgumentParser()
@@ -1607,10 +1711,12 @@ def main():
     scenario_run_all_resume_integrity_gate()
     # --- director final-correction-2 scenario (output-inventory guard) ---
     scenario_run_all_output_inventory_gate()
+    # --- director final-correction-3 scenario (exact file-set + receipts) ---
+    scenario_run_all_exact_inventory_gate()
 
     passed = sum(1 for r_ in results if r_["passed"])
     print(f"\n===== ADVERSARIAL SUITE: {passed}/{len(results)} scenarios passed =====")
-    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2 + 2 final-correction guards)",
+    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2 + 3 final-correction guards)",
                date=A.date,
                synthetic_only=True,
                real_exam_data_used=False,

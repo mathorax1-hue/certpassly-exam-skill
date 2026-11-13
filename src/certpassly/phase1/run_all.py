@@ -46,6 +46,32 @@ Behavior:
     predates output inventories cannot authorize skipping anything: --resume
     degrades to an explicit FULL run from stage 0, --start-from refuses
     (exit 3);
+  - the checkpoint is additionally an EXACT FILE-SET receipt (director final
+    correction 3, 2026-11-13): before --resume may no-op or any stage may be
+    skipped, every file present RIGHT NOW in the monitored output roots must
+    be attributable to the verified input baseline, to a skipped stage's
+    recorded outputs (SHA-verified), to a prior-run recorded stage not planned
+    now, or to a planned stage this run will regenerate anyway (recorded
+    later-stage paths, allowed by path only - their content is rewritten, so
+    it is never trusted as verified state). An UNEXPECTED EXTRA file - an
+    injected structured/v1/questions/q999.json, a stray answer asset, a rogue
+    file in the pinned upstream output - is refused with exit 3 naming the
+    path; unknown files can never authorize skipping nor silently feed
+    downstream consumers. For a full --resume no-op this is strict set
+    equality of the monitored file set against the checkpoint's final
+    expected file set. A partial resume that fails mid-run after a stage
+    wrote unrecordable partial output leaves those files untracked by design:
+    the next --resume refuses and the operator re-runs from stage 0
+    (fail-closed);
+  - partial resumes preserve the COMPLETE checkpoint stage list (director
+    final correction 3, P1): after --start-from or a partial --resume, the
+    new checkpoint carries the verified skipped stages' receipts (exit
+    status + output inventories, marked skipped_this_run) merged with the
+    freshly executed stages - each stage exactly once, in plan order - so
+    later resumes keep full traceability and partial resumes can chain
+    (repeated --start-from / --resume) without rebuilding what was already
+    verified; checkpoints written by older code that dropped skipped-stage
+    receipts simply authorize less skipping and degrade safely to a full run;
   - --start-from <stage>: begin at a named stage (stage names as listed above)
     - only over a verified prior checkpoint with all earlier stages passed AND
     all their recorded outputs verified intact;
@@ -55,13 +81,17 @@ Behavior:
   - stops at the first non-zero stage and records it in the checkpoint
     (audit BLOCK exit 2, validation/reconciliation failures exit 1, and -
     since the P0-1 correction - visual_qa MACHINE VISIBILITY FAILURE exit 2);
-  - writes a per-stage checkpoint log next to the config (run-checkpoint.json)
-    that includes the verified source_fingerprint, the audit summary read
-    back from the stage-0 audit record, the input baseline and, per passed
-    stage, its output inventory.
+  - writes a checkpoint next to the config (run-checkpoint.json) that includes
+    the verified source_fingerprint, the audit summary read back from the
+    stage-0 audit record, the input baseline and, per stage, its exit status
+    and output inventory - after a partial resume the COMPLETE ordered stage
+    list (verified skipped stages' receipts preserved, marked
+    skipped_this_run, merged with the freshly executed stages, each stage
+    exactly once).
 
 Exit codes: 0 = all stages passed; 1/2 = a stage failed (propagated);
-3 = source-guard or output-inventory-guard refusal (--resume / --start-from
+3 = source-guard or output-inventory-guard refusal, including unexpected
+extra files in the monitored output roots (--resume / --start-from
 integrity precondition).
 
 Stages run via ``python -m certpassly.phase1.<stage>`` so the installed (or
@@ -263,17 +293,29 @@ def _stage_delta(before, after):
 
 def verify_prior_outputs(a, cfg, prior, plan, skip_names):
     """Fail-closed verification of the artifacts of the stages that would be
-    SKIPPED (director final correction 2: no false successful no-op over
-    deleted or modified outputs). The prior checkpoint must carry - and the
-    disk must still match - (1) the input baseline recorded at the start of
-    the verified run and (2) every skipped stage's output inventory.
+    SKIPPED, now including the EXACT FILE-SET inventory (director final
+    correction 3, 2026-11-13: no false successful no-op over deleted,
+    modified OR UNEXPECTEDLY ADDED outputs). The prior checkpoint must carry
+    - and the disk must still match - (1) the input baseline recorded at the
+    start of the verified run and (2) every skipped stage's output inventory;
+    and (3) every file present RIGHT NOW in the monitored output roots must
+    be attributable to that verified state or to a stage this run will
+    re-run anyway (its recorded later-stage paths). An untracked extra file
+    - an injected questions/q999.json, a stray answer asset, a rogue file in
+    the pinned upstream output - is refused: it can never authorize
+    skipping, because the checkpoint is an exact file-set receipt, not a
+    sample of paths that happen to still hash correctly.
 
     Returns ``(action, reason)``:
-      ``("allow", "")``        every recorded artifact is intact - skipping safe;
+      ``("allow", "")``        every recorded artifact is intact AND the
+                              monitored file set is exactly the verified one
+                              (plus, for partial resumes, recorded paths of
+                              stages that will be regenerated) - skipping safe;
       ``("cannot_verify", m)`` the checkpoint predates output inventories -
                               it cannot authorize skipping anything;
-      ``("refuse", m)``       recorded artifacts are missing or modified -
-                              integrity violation, exit GUARD_EXIT.
+      ``("refuse", m)``       recorded artifacts are missing or modified, or
+                              unexpected extra files exist - integrity
+                              violation, exit GUARD_EXIT.
     """
     if not skip_names:
         return ("allow", "")
@@ -281,8 +323,10 @@ def verify_prior_outputs(a, cfg, prior, plan, skip_names):
     if not isinstance(base, list) or not base:
         return ("cannot_verify", "the checkpoint records no input baseline "
                 "(it predates output-inventory verification)")
-    entries = {s.get("stage"): s for s in prior.get("stages", [])
-               if isinstance(s, dict)}
+    entries = {}
+    for s in prior.get("stages", []):
+        if isinstance(s, dict) and s.get("stage"):
+            entries[s["stage"]] = s  # last record of a stage wins
     no_inv = [n for n in skip_names
               if not isinstance(entries.get(n, {}).get("outputs"), list)]
     if no_inv:
@@ -290,19 +334,62 @@ def verify_prior_outputs(a, cfg, prior, plan, skip_names):
                 f"stage(s) {no_inv}; the checkpoint predates per-stage output "
                 f"verification")
     current = snapshot_outputs(a, cfg)
+    plan_names = [name for name, _ in plan]
     # expected state = the input baseline, OVERRIDDEN in plan order by every
     # skipped stage's recorded outputs (a later stage legitimately rewrites
     # files that existed when the run started)
     expected = {e.get("path"): e.get("sha256") for e in base
                 if isinstance(e, dict) and e.get("path")}
     owners = {}
-    for name, _ in plan:
+    for name in plan_names:
         if name in skip_names:
             for e in entries[name]["outputs"]:
                 if isinstance(e, dict) and e.get("path"):
                     expected[e["path"]] = e.get("sha256")
                     owners[e["path"]] = name
-    bad = sorted(p for p, s in expected.items() if current.get(p) != s)
+    # ... plus recorded stages that are NOT in this run's plan (e.g. an
+    # adversarial stage of a prior run planned with --adversarial-base):
+    # final artifacts nothing in this run regenerates, so they are verified
+    # too, after the planned stages (plan order stays canonical)
+    for name, s in entries.items():
+        if name not in plan_names and isinstance(s.get("outputs"), list):
+            for e in s["outputs"]:
+                if (isinstance(e, dict) and e.get("path")
+                        and e["path"] not in owners):
+                    expected[e["path"]] = e.get("sha256")
+                    owners[e["path"]] = name
+    # paths of planned stages this run will RE-RUN anyway: allowed to exist
+    # in any content (or be absent) because the re-run regenerates them -
+    # tolerated by path as the checkpoint's known later-stage artifacts,
+    # never trusted as verified state
+    regenerating = {}
+    for name in plan_names:
+        if (name not in skip_names
+                and isinstance(entries.get(name, {}).get("outputs"), list)):
+            for e in entries[name]["outputs"]:
+                if isinstance(e, dict) and e.get("path"):
+                    regenerating[e["path"]] = name
+    # exact file-set inventory (director final correction 3): every
+    # monitored file on disk RIGHT NOW must be either verified expected
+    # state or a recorded later-stage path. set(current) - set(expected)
+    # is the gap the old guard never looked at.
+    extras = sorted(set(current) - set(expected) - set(regenerating))
+    if extras:
+        shown = "; ".join(f"{p} (untracked: no verified stage or input "
+                         f"baseline recorded it)" for p in extras[:5])
+        shown += " ..." if len(extras) > 5 else ""
+        return ("refuse", f"unexpected_output_files: {len(extras)} file(s) "
+                f"present in the monitored output roots that no verified "
+                f"checkpoint stage or input baseline recorded: {shown}; "
+                f"inspect and remove the untracked file(s), or re-run from "
+                f"stage 0 - an unknown file set can never authorize "
+                f"skipping (no answer image or stray content may silently "
+                f"feed downstream consumers)")
+    # recorded SHA verification (correction 2 semantics), excluding the
+    # paths this run regenerates (their on-disk content is about to be
+    # rewritten, so only their ATTRIBUTION - checked above - matters)
+    bad = sorted(p for p, s in expected.items()
+                 if p not in regenerating and current.get(p) != s)
     if bad:
         bad_outputs = [p for p in bad if p in owners]
         bad_inputs = [p for p in bad if p not in owners]
@@ -452,14 +539,19 @@ def run_cli(argv=None):
                     help="print the planned stage commands and exit 0 without running")
     ap.add_argument("--resume", action="store_true",
                     help="skip stages that already exited 0 in a prior checkpoint with "
-                         "the same config, the same verified source fingerprint AND "
-                         "all their recorded outputs still intact on disk; otherwise "
-                         "run everything from stage 0 (never skips the source checks "
-                         "or the output-inventory verification)")
+                         "the same config, the same verified source fingerprint, "
+                         "all their recorded outputs still intact on disk AND no "
+                         "unexpected extra files in the monitored output roots "
+                         "(exact file-set inventory); otherwise run everything from "
+                         "stage 0 (never skips the source checks or the output-"
+                         "inventory verification)")
     ap.add_argument("--start-from", choices=STAGES + ["adversarial"],
                     help="begin at the named stage; requires a verified prior "
                          "checkpoint of this config whose earlier stages all exited 0 "
-                         "and whose recorded outputs verify (both guards still run)")
+                         "and whose recorded outputs verify, with no unexpected "
+                         "extra files beyond recorded later-stage artifacts that "
+                         "will be regenerated (both guards still run; the new "
+                         "checkpoint preserves the skipped stages' receipts)")
     a = ap.parse_args(argv)
 
     cfg = json.load(open(a.config, encoding='utf-8'))
@@ -540,9 +632,10 @@ def run_cli(argv=None):
 
     # ---- output-inventory guard: before --resume may no-op or any stage may
     # be skipped, every skipped stage's recorded outputs (and the input
-    # baseline) are re-hashed and compared - a deleted or modified question
-    # JSON / asset binary / QA report can never yield a false successful
-    # no-op (director final correction 2) ----
+    # baseline) are re-hashed and compared, and the monitored output roots
+    # are checked as an EXACT file set - a deleted, modified OR UNEXPECTEDLY
+    # ADDED question JSON / asset binary / QA report / stray file can never
+    # yield a false successful no-op (director final corrections 2 and 3) ----
     if (a.resume or a.start_from) and skip_names and guard_ok:
         vaction, vreason = verify_prior_outputs(a, cfg, prior, plan, skip_names)
         if a.dry_run:
@@ -589,11 +682,29 @@ def run_cli(argv=None):
     base_snap = snapshot_outputs(a, cfg)  # input baseline at run START
     snap = dict(base_snap)
     skip = set(skip_names)
+    # director final correction 3 (P1): the new checkpoint must carry the
+    # COMPLETE ordered stage list. The verified skipped stages' receipts
+    # (exit status + output inventories, both re-verified by the guards
+    # above this run) are carried into the new checkpoint and merged with
+    # the freshly executed stages - each stage exactly once, in plan order,
+    # no double-counting - so later resumes keep full traceability and
+    # partial resumes can chain instead of silently losing the right to
+    # skip the stages that were already verified.
+    prior_entries = {}
+    if prior:
+        for s in prior.get("stages", []):
+            if isinstance(s, dict) and s.get("stage"):
+                prior_entries[s["stage"]] = s  # last record of a stage wins
     log, rc = [], 0
     for name, args in plan:
         if name in skip:
+            carried = dict(prior_entries.get(name) or {})
+            carried["stage"] = name
+            carried["skipped_this_run"] = True  # receipt preserved, not re-run
+            log.append(carried)
             print(f"--- stage: {name} --- skipped (--start-from/--resume; "
-                  "recorded outputs verified)")
+                  "recorded outputs verified; receipt preserved in the "
+                  "new checkpoint)")
             continue
         if rc == 0:
             rc |= run_stage(name, args, log)

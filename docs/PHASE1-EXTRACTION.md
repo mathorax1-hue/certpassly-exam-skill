@@ -145,6 +145,36 @@ git -C vendor/certpassly-exam-pipeline rev-parse HEAD
   output inventories cannot authorize skipping anything: `--resume` degrades
   to an explicit FULL rebuild from stage 0 (loud notice, nothing skipped),
   `--start-from` refuses (exit 3). Never a green no-op without verification.
+- **The checkpoint is an exact file-set receipt** (director final correction
+  3, 2026-11-13): before `--resume` may no-op or any stage may be skipped,
+  every file present RIGHT NOW in the monitored output roots (the
+  `structured/v1` tree, the pinned upstream split output, the pmap and
+  build-stats sidecars and the stage-0 audit record) must be attributable to
+  the verified input baseline, to a skipped stage's recorded outputs
+  (SHA-verified), to a prior-run recorded stage not planned now, or to a
+  planned stage this run regenerates anyway (its recorded later-stage paths,
+  tolerated by path - their content is rewritten, never trusted). An
+  UNEXPECTED EXTRA file - an injected `questions/q999.json`, a stray answer
+  asset in `assets/`, a rogue file in the upstream output - refuses with
+  **exit 3** naming the path, before any stage runs, leaving the checkpoint
+  untouched: an unknown file set can never authorize skipping, and no
+  untracked answer image can silently feed downstream (public/site) output.
+  For a full `--resume` no-op this is strict set equality against the
+  checkpoint's final expected file set. Fail-closed corollary: a stage that
+  failed mid-run after writing unrecordable partial output leaves those
+  files untracked, so the next `--resume` refuses and the operator re-runs
+  from stage 0 (never a silent skip over partial output).
+- **Partial resumes preserve the complete stage list** (director final
+  correction 3, P1): after `--start-from <stage>` or a partial `--resume`,
+  the new checkpoint carries the verified skipped stages' receipts (exit
+  status + output inventories, marked `skipped_this_run`) merged with the
+  freshly executed stages - each stage exactly once, in plan order, no
+  double-counting. Repeated partial resumes therefore chain (e.g.
+  `--start-from reconcile`, then `--start-from visual_qa`, then a verified
+  `--resume` no-op) without rebuilding what was already verified, and later
+  resumes keep full per-stage traceability. Checkpoints written by older
+  code that dropped skipped-stage receipts simply authorize less skipping
+  and degrade safely to a full run.
 - **Per-stage idempotence**: each stage only reads its declared inputs
   (source PDF, pinned extractor output, config) and rewrites its own outputs.
 
@@ -183,7 +213,7 @@ python -m certpassly.phase1.validate_structured_v1 <config>.json
 python -m certpassly.phase1.reconcile <config>.json
 python -m certpassly.phase1.visual_qa <config>.json
 
-# 5. 27-scenario synthetic adversarial suite (independent of any real exam)
+# 5. 37-scenario synthetic adversarial suite (independent of any real exam)
 python -m certpassly.phase1.adversarial --base <scratch> \
     --upstream "<upstream>/scripts" --report-out <structured>/qa/adversarial-tests.json
 
@@ -262,6 +292,7 @@ private adapters may remain.
 | stage fails mid-pipeline | genuine source/layout issue | inspect `run-checkpoint.json`; fix the cause; `--resume` after the fix |
 | `source guard refused --resume/--start-from` (exit 3) | the source PDF changed/went missing, the config or upstream pin was edited, the installed toolkit code changed, or the checkpoint is stale | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so the audit re-verifies the source |
 | `output-inventory guard refused --resume/--start-from` (exit 3) | a generated output (question JSON, asset binary, QA/validation/reconciliation report) was deleted or modified after the verified run, or a monitored pipeline input changed | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so every stage rebuilds and re-verifies its artifacts |
+| `unexpected_output_files ... refused --resume/--start-from` (exit 3) | a file exists in the monitored output roots (structured/v1 tree, upstream output, sidecars) that no verified stage or input baseline recorded - e.g. an injected `q999.json`, a stray answer asset, a rogue upstream file, or unrecordable partial output of a failed stage | nothing ran and the checkpoint is untouched; inspect and remove the untracked file(s) if they are not yours, then resume - or re-run from stage 0 WITHOUT the flags |
 | `NOTICE: --resume cannot verify this checkpoint's artifacts` | the checkpoint predates output-inventory verification (old format) | expected fail-closed behavior: all stages re-run from stage 0; nothing is skipped |
 | wrong toolkit version | unpinned checkout | `git checkout <full-sha>`; `certpassly phase1-info` |
 
@@ -278,7 +309,7 @@ PDFs, answer keys, release workflows or website state.
   `python scripts/check_public_safety.py` — synthetic fixtures only.
 - Full-dependency environments additionally run the fitz-gated tests
   (audit identity gates, encrypted-PDF fail-closed, builder provenance).
-- The 27-scenario adversarial suite (`certpassly.phase1.adversarial`) runs the
+- The 37-scenario adversarial suite (`certpassly.phase1.adversarial`) runs the
   REAL pinned extractor + REAL builder on SYNTHETIC PDFs; it requires the
   phase1/visual extras plus Poppler and Tesseract and is executed in a
   full private/local environment, not on the stdlib-only public runner.
