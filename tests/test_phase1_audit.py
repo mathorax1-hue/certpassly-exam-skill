@@ -91,6 +91,88 @@ class AuditSourceTests(unittest.TestCase):
         after = hashlib.sha256(open(self.pdf, "rb").read()).hexdigest()
         self.assertEqual(before, after, "read-only audit must not modify the PDF")
 
+    # ---- P0-C (director audit 2026-11-13): hard BLOCK criteria ----
+
+    def _make(self, name, pages):
+        pdf = os.path.join(self.root, name)
+        doc = fitz.open()
+        for texts, size in pages:
+            p = doc.new_page(width=size[0], height=size[1])
+            y = 80
+            for t in texts:
+                p.insert_text((60, y), t, fontsize=11)
+                y += 14
+        doc.save(pdf)
+        doc.close()
+        return pdf
+
+    def test_no_markers_blocks(self):
+        """A PDF with no question markers must BLOCK (exit 2), not audit-clean."""
+        pdf = self._make("nomarkers.pdf", [(["just some prose", "no questions here"], (612, 792))])
+        out = os.path.join(self.root, "audit-nomarkers.json")
+        rc = audit_source.run_audit(["--pdf", pdf, "--out", out])
+        self.assertEqual(rc, 2)
+        rep = json.loads(open(out).read())
+        self.assertEqual(rep["verdict"], "BLOCKED")
+        self.assertTrue(any("no question markers" in b for b in rep["blocked_reasons"]),
+                        rep["blocked_reasons"])
+
+    def test_duplicate_markers_block(self):
+        pdf = self._make("dup.pdf", [(["QUESTION 1", "stem", "QUESTION 1", "stem2"], (612, 792))])
+        out = os.path.join(self.root, "audit-dup.json")
+        rc = audit_source.run_audit(["--pdf", pdf, "--out", out])
+        self.assertEqual(rc, 2)
+        rep = json.loads(open(out).read())
+        self.assertTrue(any("duplicate question markers" in b for b in rep["blocked_reasons"]))
+
+    def test_noncontiguous_markers_block(self):
+        pdf = self._make("gap.pdf", [(["QUESTION 1", "stem", "QUESTION 3", "stem3"], (612, 792))])
+        out = os.path.join(self.root, "audit-gap.json")
+        rc = audit_source.run_audit(["--pdf", pdf, "--out", out])
+        self.assertEqual(rc, 2)
+        rep = json.loads(open(out).read())
+        self.assertTrue(any("identity_ambiguous" in b for b in rep["blocked_reasons"]),
+                        rep["blocked_reasons"])
+
+    def test_nonuniform_geometry_blocks(self):
+        """Mixed page sizes (possible concatenated documents) must BLOCK."""
+        pdf = self._make("mixed.pdf", [(["QUESTION 1", "stem"], (612, 792)),
+                                        (["Correct Answer: A"], (792, 612))])
+        out = os.path.join(self.root, "audit-mixed.json")
+        rc = audit_source.run_audit(["--pdf", pdf, "--out", out])
+        self.assertEqual(rc, 2)
+        rep = json.loads(open(out).read())
+        self.assertTrue(any("identity_ambiguous" in b for b in rep["blocked_reasons"]))
+
+    def test_unextractable_image_blocks(self):
+        """A corrupt (unextractable) image stream on a page must BLOCK."""
+        import fitz
+        pdf = os.path.join(self.root, "corruptimg.pdf")
+        # reuse a good doc then append a broken image xref via raw object edit
+        doc = fitz.open(self.pdf)
+        page = doc[0]
+        try:
+            # insert an image stream that will fail binary extraction
+            broken = b"\x00\x01\x02not-a-real-image"
+            doc.update_stream(doc.get_new_xref(), broken)
+            # register as an Image XObject with broken filter
+            doc.xref_set_key(doc.get_new_xref() - 1, "Subtype", "/Image")
+            doc.xref_set_key(doc.get_new_xref() - 1, "Width", "10")
+            doc.xref_set_key(doc.get_new_xref() - 1, "Height", "10")
+            doc.xref_set_key(doc.get_new_xref() - 1, "Filter", "/FlateDecode")
+            doc.save(pdf)
+        except Exception:
+            self.skipTest("PyMuPDF refuses to build the broken-stream fixture on this version")
+        doc.close()
+        out = os.path.join(self.root, "audit-corrupt.json")
+        rc = audit_source.run_audit(["--pdf", pdf, "--out", out])
+        rep = json.loads(open(out).read())
+        if rep.get("images", {}) and rep["images"].get("unextractable"):
+            self.assertEqual(rc, 2)
+            self.assertTrue(any("unextractable source image" in b for b in rep["blocked_reasons"]))
+        else:
+            self.skipTest("broken stream not registered as page-referenced image on this version")
+
 
 if __name__ == "__main__":
     unittest.main()

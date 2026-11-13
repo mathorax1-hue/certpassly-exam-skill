@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse, json, os, subprocess, sys, datetime
 
 STAGES = [
+    "audit_source",
     "build_structured_v1",
     "build_exports",
     "make_source_manifest",
@@ -41,7 +42,23 @@ STAGES = [
 def stage_commands(a, cfg):
     """Build the ordered (name, argv) plan for this run."""
     py = sys.executable
-    plan = [(s, [py, "-m", f"certpassly.phase1.{s}", a.config]) for s in STAGES]
+    # P0-C: the read-only source audit is stage 0 and is enforced BEFORE any
+    # build stage: the PDF must exist and match the config's expected
+    # SHA-256/bytes (config.source), and must pass the hard BLOCK criteria
+    # (encryption, identity ambiguity, marker continuity, unextractable
+    # images). A failed audit stops the pipeline with a non-zero exit.
+    src = cfg.get("source", {})
+    audit_argv = [py, "-m", "certpassly.phase1.audit_source",
+                  "--pdf", cfg["paths"]["pdf"]]
+    if src.get("expected_pdf_sha256"):
+        audit_argv += ["--expected-sha256", src["expected_pdf_sha256"]]
+    if src.get("expected_bytes"):
+        audit_argv += ["--expected-bytes", str(src["expected_bytes"])]
+    audit_argv += ["--out", os.path.join(os.path.dirname(os.path.abspath(a.config)),
+                                         "source-audit.json")]
+    plan = [("audit_source", audit_argv)]
+    plan += [(s, [py, "-m", f"certpassly.phase1.{s}", a.config])
+             for s in STAGES if s != "audit_source"]
     if not a.skip_adversarial and a.adversarial_base:
         report_out = os.path.join(cfg["paths"]["out_dir"], "qa", "adversarial-tests.json")
         plan.append((

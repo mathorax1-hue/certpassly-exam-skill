@@ -49,7 +49,7 @@ class RunAllTests(unittest.TestCase):
                          "dry-run must not write a checkpoint")
 
     def test_stop_at_first_failure(self):
-        codes = iter([0, 1])  # build_structured_v1 passes, build_exports fails
+        codes = iter([0, 0, 1])  # audit passes, build passes, exports fails
 
         def fake_stage(name, args, log):
             code = next(codes, 0)
@@ -61,15 +61,27 @@ class RunAllTests(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         out = json.loads(open(self.ckpt).read())
         ran = [s["stage"] for s in out["stages"] if s.get("exit_code") is not None]
-        self.assertEqual(ran, ["build_structured_v1", "build_exports"])
+        self.assertEqual(ran, ["audit_source", "build_structured_v1", "build_exports"])
         skipped = [s["stage"] for s in out["stages"] if s.get("exit_code") is None]
         self.assertEqual(skipped, ["make_source_manifest", "validate_structured_v1",
                                    "reconcile", "visual_qa"])
         self.assertEqual(out["overall_exit"], 1)
 
+    def test_audit_is_stage_zero(self):
+        """P0-C: the source audit must be planned and run BEFORE any build."""
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rs.side_effect = lambda name, args, log: (
+                log.append(dict(stage=name, command=" ".join(args), exit_code=0, tail="")) or 0)
+            self._run()
+        first_called = rs.call_args_list[0][0][0]
+        self.assertEqual(first_called, "audit_source")
+        audit_argv = rs.call_args_list[0][0][1]
+        self.assertIn("certpassly.phase1.audit_source", " ".join(audit_argv))
+        self.assertIn("--expected-sha256", audit_argv)
+
     def test_resume_skips_passed_stages(self):
-        # first run: stage 1 passes, stage 2 fails
-        codes = iter([0, 1])
+        # first run: audit + build pass, exports fails
+        codes = iter([0, 0, 1])
 
         def fake_stage(name, args, log):
             code = next(codes, 0)

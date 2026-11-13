@@ -23,7 +23,25 @@ uploads or imports to any website. All outputs are private workspace files.
   keys, research archives or the pinned upstream checkout.
 - **Identity gate.** `phase1-audit` verifies SHA-256/bytes/encryption before
   anything else and exits `2` (BLOCKED) on mismatch; advertised filename
-  question counts are never trusted.
+  question counts are never trusted. BLOCK criteria are hard (director audit
+  2026-11-13): encrypted sources, identity-ambiguous geometry, missing /
+  noncontiguous / duplicate question markers and unextractable source image
+  streams all exit `2` with explicit reasons - an audit is never "complete"
+  while a blocking defect is present.
+- **Typed-letter discipline (P0-A).** On image-based questions the typed text
+  (e.g. the template `A` observed across combined-key VCE-style items) is a
+  **source literal only**: it is preserved verbatim in
+  `answer.raw_text` and marked `answer.typed_key_status =
+  source_literal_only_key_status_unknown`. The interaction type comes from
+  visual evidence (pinned OCR kind / prior drafts), and when no visual kind
+  exists the type stays `unknown` with low confidence - a typed letter never
+  implies `single_choice`. Text-only questions keep the high-confidence
+  typed-key classification.
+- **Honest blocker counters (P0-D).** Every `export-blockers.json` row carries
+  at least one explicit reason (a standalone independent-review reason when no
+  specific gate applies); `blocked_questions_with_reasons` must equal
+  `blocked_questions`, and the validator recomputes the count from the items
+  rather than trusting stored counters.
 - **Answer privacy.** Answer-reference images and combined typed+image answers
   are classified `private_reviewer_only` and are provably absent from every
   learner-facing export (`export/site-format-v1-draft` contains types and

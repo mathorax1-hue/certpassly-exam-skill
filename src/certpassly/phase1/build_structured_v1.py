@@ -487,6 +487,18 @@ def main(cfg_path):
             usages.append(image_usage(pn, "answer_reference", "private_reviewer_only", q))
 
         # question type (site taxonomy, justified)
+        # P0-A (director audit 2026-11-13): for image-based questions the type
+        # MUST come from visual evidence (pinned OCR kind / prior drafts), NEVER
+        # from a typed letter: in these VCE-style sources the typed letter is a
+        # template literal (observed 'A' for all combined-key items), not a
+        # validated widget type or complete key. Text-only questions keep the
+        # high-confidence typed-key classification.
+        typed_key_status = None
+        if visual_q and ans_kind in (ANSWER_KIND_TYPED, ANSWER_KIND_BOTH):
+            typed_key_status = (
+                "source_literal_only_key_status_unknown: the typed text is preserved verbatim "
+                "as source evidence but is NOT a validated widget type or complete key; the "
+                "choices/selections live in the question and answer images")
         if rec["options"] and ans_kind == ANSWER_KIND_TYPED and not visual_q:
             letters = re.findall(r'[A-H]', ans_raw.upper())
             if len(letters) > 1:
@@ -496,15 +508,6 @@ def main(cfg_path):
                 qtype = "single_choice"
                 basis = f"text options with single-letter typed key '{ans_raw}'"
             conf = "high"
-        elif visual_q and ans_kind in (ANSWER_KIND_TYPED, ANSWER_KIND_BOTH):
-            letters = re.findall(r'[A-H]', ans_raw.upper())
-            if len(letters) > 1:
-                qtype = "multiple_select"
-            else:
-                qtype = "single_choice"
-            basis = (f"in-image options (text layer carries only template placeholder text) with "
-                     f"typed key '{ans_raw}'; choices live in the question prompt image")
-            conf = "medium"
         elif visual_q:
             vd = vd_by_q.get(q, {})
             kind = vd.get("kind")
@@ -527,6 +530,9 @@ def main(cfg_path):
                 conf = "medium"
             else:
                 qtype, basis, conf = "unknown", "visual item with no pinned visual draft kind", "low"
+            if typed_key_status:
+                basis += (f"; typed source literal '{ans_raw}' preserved but not used for typing "
+                          f"(key status unknown)")
         else:
             qtype, basis, conf = "unknown", "no options and no typed key", "low"
 
@@ -560,6 +566,10 @@ def main(cfg_path):
             answer_image_usages=[u["usage_id"] for u in usages if u["role"] == "answer_reference"],
             selection_candidates_unapproved=candidates,
         )
+        if typed_key_status:
+            # P0-A: the typed letter on an image-based question is a source
+            # literal, never a trusted key/widget inference.
+            answer_rec["typed_key_status"] = typed_key_status
         if ans_kind == ANSWER_KIND_BOTH:
             answer_rec["source_kind_extension_note"] = (
                 "structured/v1 compatible extension: this source question carries BOTH a typed key "

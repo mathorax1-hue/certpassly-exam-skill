@@ -7,12 +7,15 @@ Each scenario builds a SYNTHETIC PDF, runs the REAL pinned upstream extractor
 correct handling OR an explicit, safe failure (FAIL/BLOCKED with reason). No
 test data comes from any real exam PDF.
 
-27 scenarios = the 17 ZAI-EXTRACT-001 pilot scenarios (ported unchanged in
-substance) + 10 ZAI-EXTRACT-002 scenarios: missing image binary, duplicate
+31 scenarios = the 17 ZAI-EXTRACT-001 pilot scenarios (ported unchanged in
+substance) + 10 ZAI-EXTRACT-002 scenarios (missing image binary, duplicate
 question ids with gap, rotated 270 pages, text insertion order, vector-only
 diagrams, multiple choices in answer screenshots, duplicate xref on three
-pages, malformed MIME image streams, non-embedded (optional) fonts, and exact
-answer-image privacy through the export layer.
+pages, malformed MIME image streams, non-embedded fonts, exact answer-image
+privacy through the export layer) + 4 director-audit P0 scenarios
+(typed-letter + dropdown image, typed-letter + three-row Yes/No matrix,
+legitimate text-only single choice control, typed placeholder + ambiguous
+image fail-closed).
 
 Usage: python -m certpassly.phase1.adversarial --base <scratch-dir>
           --upstream <pinned-scripts-dir> [--engine <dir>]
@@ -921,6 +924,161 @@ def scenario_answer_privacy_exact():
     report("answer_image_privacy_exact_no_export_leak", ok, detail)
 
 
+def _typed_letter_visual_pdf(base, name, qimg, aimg, stem):
+    """Shared builder for the P0-A defect-shape PDFs: an image-based question
+    (NO text options) that ALSO carries a typed 'Correct Answer: A' line and an
+    answer-reference screenshot - exactly the AI-901 combined-key shape."""
+    pdf = f"{base}/{name}.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=792, height=612)
+    q_text(p1, 60, 80, ["QUESTION 1", stem])
+    p1.insert_image(fitz.Rect(60, 200, 380, 360), stream=qimg)
+    p2 = doc.new_page(width=792, height=612)
+    p2.insert_text((60, 60), "Correct Answer: A", fontsize=11)
+    p2.insert_image(fitz.Rect(60, 90, 380, 250), stream=aimg)
+    doc.save(pdf)
+    return pdf
+
+
+def scenario_typed_letter_dropdown():
+    """P0-A/P0-B: typed 'A' + dropdown screenshot must type as inline_dropdown
+    (visual evidence), never single_choice; the typed A stays a source literal
+    with key status unknown."""
+    qimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.text((15, 85), "weekly", fill="black")))
+    aimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.ellipse([12, 55, 90, 75], outline="red", width=3),
+        d.text((15, 85), "weekly", fill="black")))
+    pdf = _typed_letter_visual_pdf(A.base, "typed_a_dropdown", qimg, aimg,
+                                   "HOTSPOT - Select the answer that correctly completes the sentence.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-TAD")
+    subprocess.run([sys.executable, f"{A.upstream}/analyze_visual.py", out],
+                   capture_output=True, text=True)
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-TAD", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        q1 = jload(f"{out_dir}/questions/q001.json")
+        t = q1["question_type"]["site_format_type"]
+        tks = q1["answer"].get("typed_key_status")
+        raw = q1["answer"]["raw_text"]
+        ok = (t == "inline_dropdown" and tks and raw == "A")
+        detail += f"; type={t}; typed_key_status={'set' if tks else 'MISSING'}; raw={raw!r}"
+    report("typed_letter_with_dropdown_image_not_single_choice", ok, detail)
+
+
+def scenario_typed_letter_yes_no_matrix():
+    """P0-A/P0-B: typed 'A' + three-row Yes/No matrix screenshot must type as
+    yes_no_matrix, never single_choice."""
+    rows = [("synthetic statement one", 60), ("synthetic statement two", 100),
+            ("synthetic statement three", 140)]
+
+    def draw_matrix(selected_rows=(0, 2)):
+        def d_(d):
+            d.text((10, 20), "Statements", fill="black")
+            d.text((200, 20), "Yes", fill="black")
+            d.text((260, 20), "No", fill="black")
+            for i, (txt, y) in enumerate(rows):
+                d.text((10, y), txt, fill="black")
+                d.rectangle([195, y - 15, 225, y + 15], outline="black")
+                d.rectangle([255, y - 15, 285, y + 15], outline="black")
+                if i in selected_rows:
+                    d.rectangle([196, y - 14, 224, y + 14], fill="black")
+        return d_
+
+    qimg = png_bytes(320, 170, draw_matrix(selected_rows=()))
+    aimg = png_bytes(320, 170, draw_matrix(selected_rows=(0, 2)))
+    pdf = _typed_letter_visual_pdf(A.base, "typed_a_yesno", qimg, aimg,
+                                   "HOTSPOT - For each of the following statements, select Yes if "
+                                   "the statement is true. Otherwise, select No.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-TAY")
+    subprocess.run([sys.executable, f"{A.upstream}/analyze_visual.py", out],
+                   capture_output=True, text=True)
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-TAY", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        q1 = jload(f"{out_dir}/questions/q001.json")
+        t = q1["question_type"]["site_format_type"]
+        tks = q1["answer"].get("typed_key_status")
+        ok = (t == "yes_no_matrix" and tks)
+        detail += f"; type={t}; typed_key_status={'set' if tks else 'MISSING'}"
+    report("typed_letter_with_three_row_yes_no_not_single_choice", ok, detail)
+
+
+def scenario_legitimate_text_single_choice():
+    """P0-B control: a genuine text-options question with typed 'A' (no images)
+    must remain single_choice with high confidence and NO typed_key_status."""
+    pdf = f"{A.base}/legit_text_sc.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=792, height=612)
+    q_text(p1, 60, 80, ["QUESTION 1", "Which synthetic option is correct?",
+                        "A. one", "B. two", "C. three", "D. four",
+                        "Correct Answer: A",
+                        "Section: (none)", "Explanation", "Explanation/Reference:"])
+    doc.save(pdf)
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-LSC")
+    rb, out_dir, _ = run_builder(pdf, "SYN-LSC", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        q1 = jload(f"{out_dir}/questions/q001.json")
+        t = q1["question_type"]["site_format_type"]
+        conf = q1["question_type"]["confidence"]
+        tks = q1["answer"].get("typed_key_status")
+        ok = (t == "single_choice" and conf == "high" and not tks)
+        detail += f"; type={t}; confidence={conf}; typed_key_status={'set (WRONG)' if tks else 'absent'}"
+    report("legitimate_text_single_choice_unchanged", ok, detail)
+
+
+def scenario_typed_letter_ambiguous_image():
+    """P0-B: typed placeholder 'A' + an image with no recognizable widget must
+    fail closed: type unknown, low confidence, typed A a source literal, and the
+    export blocker must carry an explicit reason."""
+    qimg = png_bytes(300, 120, lambda d: (
+        d.ellipse([20, 20, 130, 100], outline="black"),
+        d.line([150, 20, 280, 100], fill="black"),
+        d.text((15, 110), "abstract", fill="black")))
+    aimg = png_bytes(300, 120, lambda d: (
+        d.ellipse([20, 20, 130, 100], outline="black", width=3),
+        d.line([150, 20, 280, 100], fill="black"),
+        d.ellipse([25, 25, 125, 95], fill="gray")))
+    pdf = _typed_letter_visual_pdf(A.base, "typed_a_ambiguous", qimg, aimg,
+                                   "For each of the following, select the appropriate answer.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-TAA")
+    subprocess.run([sys.executable, f"{A.upstream}/analyze_visual.py", out],
+                   capture_output=True, text=True)
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-TAA", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        q1 = jload(f"{out_dir}/questions/q001.json")
+        t = q1["question_type"]["site_format_type"]
+        conf = q1["question_type"]["confidence"]
+        tks = q1["answer"].get("typed_key_status")
+        re_ = run_exports(cfgp)
+        blockers = jload(f"{out_dir}/export/site-format-v1-draft/export-blockers.json")
+        reasons = blockers["items"][0]["cannot_export_without_review"] if blockers["items"] else []
+        honest = (blockers.get("blocked_questions_with_reasons") == blockers.get("blocked_questions")
+                  == 1)
+        ok = (t == "unknown" and conf == "low" and tks and re_.returncode == 0
+              and any("cannot_export_type" in x for x in reasons)
+              and any("cannot_export_key" in x for x in reasons) and honest)
+        detail += (f"; type={t}; confidence={conf}; typed_key_status={'set' if tks else 'MISSING'}; "
+                   f"blocker_reasons={len(reasons)}; honest_counters={honest}")
+    report("typed_placeholder_with_ambiguous_image_fails_closed", ok, detail)
+
+
 def main():
     global A
     ap = argparse.ArgumentParser()
@@ -969,10 +1127,15 @@ def main():
     scenario_malformed_mime()
     scenario_optional_font()
     scenario_answer_privacy_exact()
+    # --- new ZAI-EXTRACT-003 director-audit P0 scenarios ---
+    scenario_typed_letter_dropdown()
+    scenario_typed_letter_yes_no_matrix()
+    scenario_legitimate_text_single_choice()
+    scenario_typed_letter_ambiguous_image()
 
     passed = sum(1 for r_ in results if r_["passed"])
     print(f"\n===== ADVERSARIAL SUITE: {passed}/{len(results)} scenarios passed =====")
-    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10)",
+    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0)",
                date=A.date,
                synthetic_only=True,
                real_exam_data_used=False,

@@ -53,7 +53,7 @@ sequence, caching, troubleshooting and the honest scope statement.
 | python -m certpassly.phase1.validate_structured_v1 PRIVATE/config.json | Config-driven validation contract | extraction-report.json |
 | python -m certpassly.phase1.reconcile PRIVATE/config.json | Count-system cross-walk | reconciliation.json |
 | python -m certpassly.phase1.visual_qa PRIVATE/config.json | Machine visual QA (not human review) | qa/ renders and reports |
-| certpassly phase1-extract --config PRIVATE/config.json --upstream-scripts DIR [--dry-run --resume --start-from STAGE] | Deterministic stage orchestrator with checkpoints | Stage outputs + checkpoint |
+| certpassly phase1-extract --config PRIVATE/config.json --upstream-scripts DIR [--dry-run --resume --start-from STAGE] | Deterministic stage orchestrator with checkpoints; runs the read-only source audit as stage 0 and refuses to continue past a failed audit | Stage outputs + checkpoint |
 | python -m certpassly.phase1.adversarial --base SCRATCH --upstream PINNED/scripts | 27 synthetic adversarial scenarios (real pinned extractor + real builder) | Scratch + optional report |
 
 

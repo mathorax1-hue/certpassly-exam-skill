@@ -128,14 +128,25 @@ def main(cfg_path):
         reasons = []
         if r["answer"]["source_kind"] in ("answer_reference_image", "typed_text_with_answer_image"):
             reasons.append(reason_answer)
+        if r["answer"].get("typed_key_status"):
+            reasons.append("cannot_export_key: typed source literal on an image-based question; "
+                           "key status unknown, requires visual/per-row review")
         if r["answer"]["selection_candidates_unapproved"]:
             reasons.append("cannot_export_key: machine/manual candidates are explicitly unapproved")
         if r["options"]["mode"] == "in_question_image":
             reasons.append("cannot_export_options: option list lives inside the question image; requires approved visual transcription")
         if r["question_type"]["site_format_type"] == "unknown":
             reasons.append("cannot_export_type: no justified site type")
+        if r["question_type"]["confidence"] == "low":
+            reasons.append("cannot_export_type: low-confidence classification pending review")
         if r.get("editorial_overlay_status") == "superseded_by_editorial_replacement":
             reasons.append(f"superseded_by_editorial_replacement: {r['editorial_replacement_id']} (separate layer)")
+        if not reasons:
+            # P0-D (director audit 2026-11-13): every blocked row must carry an
+            # explicit, real reason; an empty reason list made the counter
+            # misleading (rows counted as blocked with nothing blocking them).
+            reasons.append("cannot_export_without_independent_review: Phase 1 is source-capture "
+                           "only; no independent reviewer/authoring approval exists yet")
         blocked.append({"question": q, "cannot_export_without_review": reasons})
 
     site = {
@@ -152,8 +163,16 @@ def main(cfg_path):
     }
     site["type_counts"] = dict(Counter(v["site_format_type"] for v in typed.values()))
     P.jdump(site, f"{V1}/export/site-format-v1-draft/question-type-draft.json")
-    P.jdump({"description": "Per-question fail-closed export blockers; nothing is exported past these gates without review.",
-             "blocked_questions": len(blocked), "items": blocked},
+    # P0-D: honest counters - report both the row count and the count of rows
+    # carrying at least one explicit reason; they must be equal.
+    with_reasons = sum(1 for b in blocked if b["cannot_export_without_review"])
+    P.jdump({"description": ("Per-question fail-closed export blockers; nothing is exported past "
+                             "these gates without review. Every row carries at least one explicit "
+                             "reason; blocked_questions_with_reasons must equal blocked_questions."),
+             "blocked_questions": len(blocked),
+             "blocked_questions_with_reasons": with_reasons,
+             "all_rows_have_reasons": with_reasons == len(blocked),
+             "items": blocked},
             f"{V1}/export/site-format-v1-draft/export-blockers.json")
 
     print("roundtrip:", roundtrip["result"], "| field mismatches:", roundtrip["field_mismatches"])

@@ -100,6 +100,16 @@ Private proof: https://github.com/mathorax1-hue/raw-exam/actions/runs/4318432940
 
 **Schema fix from the same batch:** owner exam codes may contain underscores (e.g. FCP_FGT_AD-7.6); the structured/v1 template's exam_code pattern now allows them. Previously accepted extractions (codes without underscores) remain valid under the widened pattern; only the emitted extraction-schema.json pattern string differs on replay.
 
+## 2026-11-13: director audit P0 corrections to the promoted Phase 1 toolkit
+
+**Observed (director independent content/code audit):** (P0-A) image-based questions carrying a typed letter were classified `single_choice` from the letter alone - on VCE-style sources the letter is a template literal (observed `A` on all 34 combined-key items of one pilot), not widget evidence; q002/q004/q006 of that pilot are actually dropdown / 3-row Yes-No matrices. (P0-B) the type-count check only compared values already stored in config, so an unknown/low-confidence type could pass as a release-ready gate. (P0-C) `audit_source` reported `AUDIT_COMPLETE`/exit 0 for identity-ambiguous, zero/duplicate-marker or unextractable-image sources; `run_all` never invoked the audit; the standalone validator silently skipped PDF readback when the PDF was missing. (P0-D) `export-blockers.json` counted rows with NO blocking reasons (34/89 on one pilot, 56/114 on another), making the blocked counter misleading.
+
+**Fix:** typed letters on image questions are now recorded as `answer.typed_key_status = source_literal_only_key_status_unknown` and are never used for typing; the type comes from visual evidence or stays `unknown`/low confidence. The audit gained hard BLOCK criteria (encrypted, identity-ambiguous, zero/duplicate/noncontiguous markers, unextractable images -> exit 2) and is stage 0 of `run_all`; the validator fails `pdf_present_for_readback` when the configured PDF is missing and adds a cross-gate that recomputes rows-with-reasons from the blocker items and requires every unknown-type / low-confidence / unverified-typed-key question to be explicitly blocked. Exports add the typed-key gate and a standalone independent-review reason so every row carries at least one real reason, with honest `blocked_questions_with_reasons` counters.
+
+**Tests:** 4 new adversarial scenarios (typed A + dropdown, typed A + 3-row Yes/No, legitimate text-only single choice control, typed placeholder + ambiguous image fail-closed; 31/31 total) plus unit tests for the audit BLOCK criteria (no markers / duplicates / gap / mixed geometry), the validator cross-gate, missing-PDF fail-closed and honest counters. Full public suite 142/142.
+
+**Rule:** structural count checks prove structure, never interaction semantics; a typed letter is source evidence, not a validated key; counters must be recomputed from data, never trusted from stale fields. Classification corrections to already-extracted layers are intentional divergences to be documented per record, not silent data changes.
+
 **Rule:** the private repository must not keep a separately evolving copy of this generic code (see the private tool-promotion policy); only narrowly justified private adapters may remain. A green public CI run or a promoted tool does not verify answer truth, approve answers, or authorize publication.
 
 ## Sustainable incident-record format

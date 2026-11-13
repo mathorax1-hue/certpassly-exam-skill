@@ -78,9 +78,15 @@ def main(cfg_path, write_report=True):
     man = P.jload(f"{v1_dir}/source-manifest.json")
     exp_sha = cfg.get("source", {}).get("expected_pdf_sha256")
     R.check("manifest_pdf_sha_known", exp_sha and man["source_pdf"]["sha256"] == exp_sha)
+    # P0-C (director audit 2026-11-13): a missing configured PDF is a FAILED
+    # check, never a silently skipped one - the validator must not report a
+    # source-integrity pass on stale cached files without the actual source.
     if pdf and os.path.isfile(pdf):
         R.check("pdf_sha256_readback", P.sha256_file(pdf) == man["source_pdf"]["sha256"])
         R.check("pdf_bytes_readback", os.path.getsize(pdf) == man["source_pdf"]["bytes"])
+    else:
+        R.check("pdf_present_for_readback", False,
+                f"configured source PDF is missing: {pdf!r}; cannot validate source integrity")
 
     # ---------- question records ----------
     qs = {f[:-5]: P.jload(f"{v1_dir}/questions/{f}") for f in qfiles}
@@ -171,7 +177,7 @@ def main(cfg_path, write_report=True):
     roles = Counter(u["role"] for u in au["usages"])
     R.check(f"roles_{exp.get('usages')}_total", sum(roles.values()) == exp.get("usages"), dict(roles))
     R.check("roles_breakdown",
-            all(roles.get(k) == v for k, v in exp.get("roles", {}).items()), dict(roles))
+            all(roles.get(k, 0) == v for k, v in exp.get("roles", {}).items()), dict(roles))
     R.check("usage_ids_unique", len({u["usage_id"] for u in au["usages"]}) == exp.get("usages"))
     R.check(f"unique_binaries_{n_a}", len({u["asset"] for u in au["usages"]}) == n_a)
     R.check("asset_files_equal_usage_assets",
@@ -220,6 +226,26 @@ def main(cfg_path, write_report=True):
                                               for v in site["question_types"].values()))
         blockers = P.jload(ex_b)
         R.check("site_export_all_gated", blockers["blocked_questions"] == n_q)
+        # P0-B/P0-D (director audit 2026-11-13): honest blocker counters and a
+        # real cross-gate - every unknown-type, low-confidence or
+        # unverified-typed-key question MUST carry an explicit export blocker;
+        # every blocker row MUST have at least one reason. The gate RECOMPUTES
+        # the rows-with-reasons from the items themselves; stored counters are
+        # cross-checked, never trusted alone.
+        items = blockers.get("items", [])
+        recomputed_rows = sum(1 for b in items if b.get("cannot_export_without_review"))
+        R.check("site_export_all_rows_have_reasons",
+                recomputed_rows == blockers["blocked_questions"] == n_q
+                and blockers.get("blocked_questions_with_reasons", recomputed_rows) == recomputed_rows
+                and blockers.get("all_rows_have_reasons") is True)
+        by_q = {b["question"]: b["cannot_export_without_review"] for b in items}
+        must_block = [q for q, r in qs.items()
+                      if r["question_type"]["site_format_type"] == "unknown"
+                      or r["question_type"]["confidence"] == "low"
+                      or r["answer"].get("typed_key_status")]
+        unblocked = [q for q in must_block if not by_q.get(q)]
+        R.check(f"unverified_types_and_keys_export_blocked_{len(must_block)}",
+                not unblocked, unblocked[:5])
     answer_assets = {u["asset"] for u in au["usages"] if u["role"] == "answer_reference"}
     leaked = []
     for root, _, files in os.walk(f"{v1_dir}/export/site-format-v1-draft"):

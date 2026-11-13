@@ -47,7 +47,7 @@ class ExportTests(unittest.TestCase):
         rt = json.loads(Path(f"{v1}/export/upstream-extract-compatible/roundtrip-check.json").read_text())
         self.assertEqual(rt["result"], "IDENTICAL")
         self.assertEqual(rt["field_mismatches"], 0)
-        self.assertEqual(rt["questions_compared"], 4)
+        self.assertEqual(rt["questions_compared"], 5)
 
     def test_double_run_determinism(self):
         rc1, snap1 = _run_and_snapshot(self.cfg_path, self.root)
@@ -70,15 +70,26 @@ class ExportTests(unittest.TestCase):
             self.assertNotIn("options", q)
             self.assertNotIn("answer", q)
         blockers = json.loads(Path(f"{v1}/export/site-format-v1-draft/export-blockers.json").read_text())
-        self.assertEqual(blockers["blocked_questions"], 4)
+        self.assertEqual(blockers["blocked_questions"], 5)
+        # P0-D: honest counters - every row has at least one reason
+        self.assertEqual(blockers["blocked_questions_with_reasons"], 5)
+        self.assertTrue(blockers["all_rows_have_reasons"])
         by_q = {b["question"]: b["cannot_export_without_review"] for b in blockers["items"]}
         # q002: image-only answer -> answer gate; q003: typed+image -> answer gate;
-        # q002 also in_question_image -> options gate; q004: missing answer + unknown type
+        # q002 also in_question_image -> options gate; q004: missing answer + unknown type;
+        # q005: typed-letter visual question -> typed-key gate + answer gate + options gate
         self.assertTrue(any("cannot_export_answer_without_review" in r for r in by_q["q002"]))
         self.assertTrue(any("cannot_export_options" in r for r in by_q["q002"]))
         self.assertTrue(any("cannot_export_answer_without_review" in r for r in by_q["q003"]))
-        self.assertTrue(any("cannot_export_key" in r for r in by_q["q004"]))
         self.assertTrue(any("cannot_export_type" in r for r in by_q["q004"]))
+        # every row must carry at least one reason (P0-D)
+        self.assertTrue(all(by_q[q] for q in ("q001", "q002", "q003", "q004", "q005")))
+        self.assertTrue(any("typed source literal" in r for r in by_q["q005"]),
+                        "P0-A: the typed-letter visual question must carry the typed-key gate")
+        self.assertTrue(any("cannot_export_answer_without_review" in r for r in by_q["q005"]))
+        # q001 (legitimate text single choice, high confidence, unapproved only)
+        # still carries the honest independent-review reason (P0-D)
+        self.assertTrue(any("cannot_export_without_independent_review" in r for r in by_q["q001"]))
 
     def test_split_original_is_exact_copy(self):
         _run_and_snapshot(self.cfg_path, self.root)

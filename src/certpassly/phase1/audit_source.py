@@ -190,6 +190,22 @@ def run_audit(argv=None):
     )
     ambiguous_identity = (not geo_uniform) or (not seq_ok)
 
+    # ---- P0-C (director audit 2026-11-13): hard BLOCK criteria ----
+    # Identity ambiguity, marker-continuity defects and unextractable source
+    # images are BLOCKING conditions, not advisory notes: a source that fails
+    # them must never reach extraction with verdict AUDIT_COMPLETE.
+    if ambiguous_identity:
+        blocked.append("identity_ambiguous: nonuniform page geometry or marker continuity "
+                       "failure; possible multi-document or corrupted source")
+    if not nums:
+        blocked.append("no question markers detected: the marker regex found nothing; either the "
+                       "layout is unsupported or the file is not an exam of this family")
+    if dup_nums:
+        blocked.append(f"duplicate question markers: {dup_nums[:10]}")
+    if unextractable:
+        blocked.append(f"unextractable source image streams: {len(unextractable)} xref(s) failed "
+                       f"binary extraction ({[u['xref'] for u in unextractable][:8]})")
+
     report = dict(
         schema_version="structured-v1",
         tool=a.tool_label,
