@@ -1,0 +1,42 @@
+{
+  "schema_version": "media-prep-v1",
+  "exam_code": "SYNTHETIC-DEMO",
+  "source": {
+    "pdf": "synthetic-workspace/synthetic-exam.pdf",
+    "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expected_bytes": 0,
+    "_note": "Regenerate the synthetic workspace with: python tests/media_prep_fixture.py --out examples/synthetic-workspace ; the fixture prints the real sha256/bytes to substitute here. Never point this at a real owner PDF in a public context."
+  },
+  "upstream": {
+    "repo": "msaqlainhaneef1/certpassly-exam-pipeline",
+    "commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc",
+    "scripts_dir": null,
+    "out_dir": "synthetic-workspace/out",
+    "run_extract": false,
+    "_note_scripts_dir": "set to a read-only pinned checkout (git clone + git checkout --detach 13dea6b) and run_extract=true to let scan run the original extractor itself"
+  },
+  "output": {
+    "clean_dir": "synthetic-workspace/prepared/clean",
+    "private_dir": "synthetic-workspace/prepared/private",
+    "manifest": "synthetic-workspace/prepared/image-manifest.json",
+    "inventory": "synthetic-workspace/prepared/image-inventory.json"
+  },
+  "display": {
+    "default_css_width": 640,
+    "pixel_density_goal": 2.0
+  },
+  "quality_profiles": {
+    "diagram": {
+      "min_native_width": 240,
+      "min_effective_density": 1.0
+    },
+    "screenshot": {
+      "min_native_width": 320,
+      "min_effective_density": 1.0
+    }
+  },
+  "privacy": {
+    "allow_external_urls": false,
+    "allowed_hosts": []
+  }
+}

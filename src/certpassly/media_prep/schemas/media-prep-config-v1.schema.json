@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mathorax1-hue/certpassly-exam-skill/raw/main/src/certpassly/media_prep/schemas/media-prep-config-v1.schema.json",
+  "title": "CertPassly media-prep config v1",
+  "description": "Config for certpassly.media_prep scan/prepare/verify-package. All relative paths resolve against the config file's directory (never the process CWD).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "exam_code",
+    "source",
+    "upstream",
+    "output"
+  ],
+  "properties": {
+    "schema_version": { "const": "media-prep-v1" },
+    "exam_code": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+    "source": {
+      "type": "object",
+      "required": ["pdf", "expected_sha256"],
+      "properties": {
+        "pdf": { "type": "string", "description": "path to the owner source PDF (private; never committed)" },
+        "expected_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "expected_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "upstream": {
+      "type": "object",
+      "required": ["out_dir"],
+      "properties": {
+        "repo": { "type": "string", "default": "msaqlainhaneef1/certpassly-exam-pipeline" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "scripts_dir": {
+          "type": "string",
+          "description": "pinned read-only checkout of the upstream pipeline (needed only for run_extract=true)"
+        },
+        "out_dir": { "type": "string", "description": "upstream extraction workspace root (holds extracted/ and media/src/)" },
+        "run_extract": {
+          "type": "boolean",
+          "default": false,
+          "description": "run the pinned upstream extract_owner_pdf.py when the output is missing"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["clean_dir", "private_dir", "manifest", "inventory"],
+      "properties": {
+        "clean_dir": { "type": "string", "description": "learner-eligible clean candidates ONLY" },
+        "private_dir": { "type": "string", "description": "isolated reviewer-only media (outside any package/web root)" },
+        "manifest": { "type": "string" },
+        "inventory": { "type": "string" }
+      }
+    },
+    "display": {
+      "type": "object",
+      "properties": {
+        "default_css_width": { "type": "number", "exclusiveMinimum": 0, "default": 640 },
+        "pixel_density_goal": { "type": "number", "exclusiveMinimum": 0, "default": 2.0 }
+      }
+    },
+    "quality_profiles": {
+      "type": "object",
+      "description": "optional overrides for the 'diagram' and 'screenshot' profiles; see docs/NONAI-SIMULATOR-IMAGES.md",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "min_native_width": { "type": "number", "minimum": 0 },
+          "min_effective_density": { "type": "number", "minimum": 0 },
+          "max_blur_flag": { "type": "number", "minimum": 0 },
+          "min_rms_contrast": { "type": "number", "minimum": 0 },
+          "max_dark_clip_fraction": { "type": "number", "minimum": 0, "maximum": 1 },
+          "min_text_edge_density": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {
+        "allow_external_urls": { "type": "boolean", "default": false },
+        "allowed_hosts": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

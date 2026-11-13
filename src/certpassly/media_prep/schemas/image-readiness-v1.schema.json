@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mathorax1-hue/certpassly-exam-skill/raw/main/src/certpassly/media_prep/schemas/image-readiness-v1.schema.json",
+  "title": "CertPassly image readiness record v1 (scan output)",
+  "description": "One per-question readiness record produced by certpassly.media_prep scan. Every field is machine-checkable; a partial readiness must honestly count blocked questions, never claim all-ready.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "source_pdf_sha256",
+    "question_id",
+    "requires_image",
+    "role_decisions",
+    "is_learner_eligible",
+    "review_status",
+    "issues",
+    "blocked_reasons"
+  ],
+  "properties": {
+    "schema_version": { "const": "image-readiness-v1" },
+    "source_pdf_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "question_id": { "type": "string", "pattern": "^q[0-9]{3,}$" },
+    "requires_image": { "type": "boolean" },
+    "role_decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "source_file",
+          "source_sha256",
+          "source_bytes",
+          "assigned_role",
+          "answer_image_inferred",
+          "verified_role",
+          "method",
+          "marking"
+        ],
+        "properties": {
+          "source_file": { "type": "string" },
+          "source_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "source_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "page": { "type": ["integer", "null"], "minimum": 1 },
+          "xref": { "type": ["integer", "null"], "minimum": 1 },
+          "assigned_role": { "enum": ["question_image", "answer_image"] },
+          "answer_image_inferred": { "type": "boolean" },
+          "verified_role": {
+            "enum": [
+              "source_original_private",
+              "answer_marked_reviewer_only",
+              "question_clean_candidate",
+              "unknown_unverified"
+            ]
+          },
+          "method": {
+            "enum": [
+              "priority_a_direct_clean_source",
+              "priority_b_annotation_free_render",
+              "priority_c_paired_clean_member",
+              "none"
+            ]
+          },
+          "marking": {
+            "type": ["object", "null"],
+            "required": ["detected_mark_boxes"],
+            "properties": {
+              "detected_mark_boxes": { "type": "integer", "minimum": 0 },
+              "method": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          },
+          "native_width": { "type": ["integer", "null"], "minimum": 1 },
+          "native_height": { "type": ["integer", "null"], "minimum": 1 },
+          "issues": { "type": "array", "items": { "type": "object" } },
+          "render_note": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "clean_candidate": {
+      "type": ["object", "null"],
+      "properties": {
+        "source_file": { "type": "string" },
+        "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "source_bytes": { "type": "integer", "minimum": 0 },
+        "xref": { "type": ["integer", "null"] },
+        "method": {
+          "enum": [
+            "priority_a_direct_clean_source",
+            "priority_b_annotation_free_render",
+            "priority_c_paired_clean_member"
+          ]
+        },
+        "pixel_source": { "enum": ["native_embedded_raster", "pdf_region_render"] },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "lossless_source": { "type": "boolean" },
+        "quality": { "type": "object" },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "is_learner_eligible": { "type": "boolean" },
+    "review_status": {
+      "enum": ["clean_ready", "clean_low_resolution", "blocked"]
+    },
+    "issues": { "type": "array", "items": { "type": "object" } },
+    "blocked_reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": {
+            "enum": [
+              "CLEAN_ASSET_MISSING",
+              "MARKED_ONLY_REVIEW_REQUIRED",
+              "SOURCE_IMAGE_LOW_RESOLUTION",
+              "SOURCE_IMAGE_AMBIGUOUS",
+              "SOURCE_IMAGE_BLURRY",
+              "SOURCE_IMAGE_LOW_CONTRAST",
+              "SOURCE_IMAGE_CLIPPED",
+              "SOURCE_IMAGE_TINY",
+              "SOURCE_IMAGE_ASPECT_EXTREME",
+              "SOURCE_ASSET_SHA_MISMATCH",
+              "SOURCE_IMAGE_CORRUPT"
+            ]
+          },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "note": { "type": "string" }
+  }
+}
