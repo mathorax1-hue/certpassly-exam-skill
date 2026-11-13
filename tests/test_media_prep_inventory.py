@@ -244,6 +244,52 @@ class ProcessingMatrixTests(unittest.TestCase):
         self.assertEqual((r7["clean_candidate"]["width"], r7["clean_candidate"]["height"]),
                          (900, 420))
 
+    def test_a15_vector_pen_mark_page_blocks(self):
+        """A vector page that carries a DARK drawn ring (a vector pen mark)
+        must NOT produce a learner image: the render shows pen-like shapes and
+        vector-drawn marks cannot be proved absent (VECTOR_PEN_MARK_UNDETECTABLE
+        handled conservatively)."""
+        root = tempfile.mkdtemp(prefix="mp-vpen-")
+        try:
+            media = {}
+            split = {"q501": {"question_key": "q501", "source_number": 501,
+                              "marker": "QUESTION n 501", "pages": [1],
+                              "stem": "Synthetic vector pen-mark stem with exhibit",
+                              "options": {"a": "one"}, "answer_raw": "A",
+                              "question_images": [], "answer_images": [],
+                              "layout_profile": "question_n_correct_answer"}}
+            pdf = os.path.join(root, "vpen.pdf")
+            import fitz
+            doc = fitz.open()
+            page = doc.new_page(width=612, height=792)
+            page.insert_text((60, 80), "QUESTION 501", fontsize=11, fontname="helv")
+            page.insert_text((60, 96), "Synthetic vector pen-mark stem with exhibit",
+                             fontsize=11, fontname="helv")
+            # big light vector table (legitimate chrome)...
+            y0 = 200
+            for r in range(6):
+                y = y0 + r * 40
+                page.draw_line(fitz.Point(40, y), fitz.Point(570, y),
+                               color=(0.55, 0.55, 0.62), width=1)
+                page.insert_text((48, y + 16), f"Vector row {r + 1} statement",
+                                 fontsize=10, fontname="helv")
+            page.draw_rect(fitz.Rect(40, y0 - 20, 570, y0 + 240),
+                           color=(0.55, 0.55, 0.62), width=1.2)
+            # ...plus a DARK vector circle drawn around row 2 (the owner "key")
+            page.draw_circle(fitz.Point(150, y0 + 60), 30, color=(0.05, 0.05, 0.05), width=3)
+            doc.save(pdf, garbage=3, deflate=True)
+            out = write_upstream_workspace(os.path.join(root, "out"), split, media)
+            cfg = load_config(self._config_for(root, pdf, out))
+            inv = build_inventory(cfg)
+            ready = run_selection(cfg, inv)
+            r = ready["q501"]
+            self.assertFalse(r["is_learner_eligible"], 
+                             "vector pen-mark page must block, not render")
+            self.assertTrue(any("PRIORITY_B_NOT_APPLICABLE" in json.dumps(i)
+                                for i in r["issues"]))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     # -- helpers -------------------------------------------------------------
 
     def _config_for(self, root, pdf, out_dir):

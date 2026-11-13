@@ -211,10 +211,10 @@ def build_pdf(path, *, pages_spec):
             y0 = 200
             for r in range(6):
                 y = y0 + r * 40
-                page.draw_line(fitz.Point(40, y), fitz.Point(570, y), color=(0.4, 0.4, 0.5), width=1)
+                page.draw_line(fitz.Point(40, y), fitz.Point(570, y), color=(0.55, 0.55, 0.62), width=1)
                 page.insert_text((48, y + 16), f"Vector row {r + 1} synthetic statement",
                                  fontsize=10, fontname="helv")
-            page.draw_rect(fitz.Rect(40, y0 - 20, 570, y0 + 240), color=(0.2, 0.2, 0.3), width=1.2)
+            page.draw_rect(fitz.Rect(40, y0 - 20, 570, y0 + 240), color=(0.55, 0.55, 0.62), width=1.2)
         annot = spec.get("annot")
         if annot:
             r = fitz.Rect(*annot["rect"])

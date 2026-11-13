@@ -209,6 +209,20 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
     clean_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
                                          dpi=300, annots=False)
     png = clean_out.pop("png_bytes")
+    # The render must be provably unmarked: run the same mark detector on the
+    # rendered pixels. Legitimate LIGHT-gray vector chrome (row lines, table
+    # borders) does not trip it; dark or colored pen-like shapes in vector
+    # content (owner-drawn circles, dark-bordered boxes) DO - and because a
+    # vector-drawn mark cannot be distinguished from vector content, the
+    # question is conservatively BLOCKED for human review instead of shipped.
+    rendered = imageio.SourceImage(f"{qid}.vector-page.png", png)
+    mk = marking_mod.detect_marks(rendered.flattened_rgb())
+    if marking_mod.looks_marked(mk):
+        issues.append({"reason": "PRIORITY_B_NOT_APPLICABLE",
+                       "detail": f"page {page_no}: vector render shows {mk['detected_mark_boxes']} "
+                                 f"pen-like shape(s); vector-drawn marks cannot be proved absent "
+                                 f"(VECTOR_PEN_MARK_UNDETECTABLE) - blocked for review"})
+        return None
     if clean_out["annotations_present"]:
         with_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
                                             dpi=300, annots=True)
@@ -221,12 +235,14 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
                        "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
                                  f"(drawings cover {drawn_area / page_area:.0%} of the page); "
                                  f"{len(clean_out['annotations_in_clip'])} real annotations "
-                                 f"excluded (render differs from with-annotations render)"})
+                                 f"excluded (render differs from with-annotations render); "
+                                 f"render mark-check clean ({mk['detected_mark_boxes']} shapes)"})
     else:
         issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
                        "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
                                  f"(drawings cover {drawn_area / page_area:.0%} of the page); "
-                                 f"page has no annotations"})
+                                 f"page has no annotations; render mark-check clean "
+                                 f"({mk['detected_mark_boxes']} shapes)"})
     return {
         "source_file": f"(pdf-page-{page_no}-vector)",
         "source_sha256": imageio.sha256_bytes(png),
