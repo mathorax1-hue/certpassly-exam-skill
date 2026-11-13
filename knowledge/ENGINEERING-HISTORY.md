@@ -84,6 +84,18 @@ Private proof: https://github.com/mathorax1-hue/raw-exam/actions/runs/4318432940
 
 **Rule:** Continue using reviewer-only/learner roles and explicit source references. Re-run the private proof checker for the release package and separate website import acceptance from build and bank checks.
 
+## 2026-11-13: Phase 1 extraction toolkit promoted from private pilot to public skill
+
+**Observed:** The proven Phase 1 PDF-extraction engine (source audit, xref media mapping, structured/v1 builder, fail-closed exports, validation, reconciliation, visual QA, 27-scenario adversarial suite) lived only in a private repository review branch, forcing every future worker to duplicate generic code privately.
+
+**Fix:** Promoted all 15 generic files into the public `certpassly.phase1` package with a `phase1` extra (PyMuPDF/Pillow/numpy/jsonschema pinned ranges), 10 registry entries, `certpassly phase1-info`/`phase1-audit`/`phase1-extract` CLI commands, checkpoint/resume orchestration, a fully synthetic public test suite (config, exports determinism, answer-privacy fail-closed, orchestrator resume logic, CLI surface, no-network import scan), and complete install/cache/doctor/troubleshooting/rollback documentation. The pinned external upstream remains a read-only external dependency (never vendored; its root has no confirmed redistributable LICENSE).
+
+**Bug found and fixed during promotion:** the read-only audit detected encryption but then attempted page-level analysis, which raises on unauthenticated encrypted documents. The public port now fails closed immediately with a BLOCKED report and no fabricated counts; the historical private toolkit crashed unhandled in that path. Regression: the synthetic encrypted-PDF test.
+
+**Byte-compatibility rule:** provenance label defaults keep the historical private-toolkit strings so a config from a previously accepted extraction reproduces its outputs byte-identically; new runs declare the public module and pinned commit via the optional config `provenance` block. Verified by replaying accepted pilot extractions with their original configs.
+
+**Rule:** the private repository must not keep a separately evolving copy of this generic code (see the private tool-promotion policy); only narrowly justified private adapters may remain. A green public CI run or a promoted tool does not verify answer truth, approve answers, or authorize publication.
+
 ## Sustainable incident-record format
 
 Every future incident or test finding should record:

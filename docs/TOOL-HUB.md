@@ -30,6 +30,33 @@ From the repository root, with Python 3.11+:
 
 If installed as a package, use certpassly rather than python -m certpassly.cli. See [dependencies](DEPENDENCIES.md) and [operator workflow](INTEGRATION-PLAYBOOK.md).
 
+## Phase 1 PDF extraction toolkit (certpassly.phase1)
+
+Config-driven source extraction of owner exam PDFs into a private structured/v1
+layer. Ten registered commands (`phase1_source_audit`, `phase1_media_pmap`,
+`phase1_structured_builder`, `phase1_export_builder`, `phase1_source_manifest`,
+`phase1_validator`, `phase1_reconciler`, `phase1_visual_qa`, `phase1_run_all`,
+`phase1_adversarial_suite`). Install once per pinned commit with
+`python -m pip install -e ".[phase1]"`, reuse the cached venv and the pinned
+upstream checkout. Strictly local, fail-closed, no release authority —
+see [PHASE1-EXTRACTION.md](PHASE1-EXTRACTION.md) for the exact command
+sequence, caching, troubleshooting and the honest scope statement.
+
+| Command | Use | Writes? |
+|---|---|---|
+| certpassly phase1-info | Toolkit version, schema compatibility, upstream pin | No |
+| certpassly phase1-audit --pdf PRIVATE/source.pdf --expected-sha256 HEX | Read-only source identity/integrity audit (exit 2 = BLOCKED) | Optional local JSON |
+| python -m certpassly.phase1.make_pmap PRIVATE/source.pdf PRIVATE/out/media/src PRIVATE/pmap.json | Map pdftohtml media to PDF xrefs | One local JSON |
+| python -m certpassly.phase1.build_structured_v1 PRIVATE/config.json | Build the private structured/v1 layer | Private structured tree |
+| python -m certpassly.phase1.build_exports PRIVATE/config.json | Deterministic + fail-closed export adapters | Export files (no learner content) |
+| python -m certpassly.phase1.make_source_manifest PRIVATE/config.json | Read-only artifact inventory | source-manifest.json |
+| python -m certpassly.phase1.validate_structured_v1 PRIVATE/config.json | Config-driven validation contract | extraction-report.json |
+| python -m certpassly.phase1.reconcile PRIVATE/config.json | Count-system cross-walk | reconciliation.json |
+| python -m certpassly.phase1.visual_qa PRIVATE/config.json | Machine visual QA (not human review) | qa/ renders and reports |
+| certpassly phase1-extract --config PRIVATE/config.json --upstream-scripts DIR [--dry-run --resume --start-from STAGE] | Deterministic stage orchestrator with checkpoints | Stage outputs + checkpoint |
+| python -m certpassly.phase1.adversarial --base SCRATCH --upstream PINNED/scripts | 27 synthetic adversarial scenarios (real pinned extractor + real builder) | Scratch + optional report |
+
+
 ## Official source capture (real output remains private)
 
     python scripts/capture_official_source.py \
