@@ -1332,7 +1332,7 @@ def scenario_reconcile_claims_tamper():
 
 
 def scenario_run_all_resume_integrity_gate():
-    """Director final correction (2026-11-13): --resume / --start-from must
+    """Director final correction 1 (2026-11-13): --resume / --start-from must
     not bypass the source PDF SHA-256 / identity / integrity checks. A REAL
     full run_all pass writes a fingerprint-verified checkpoint (positive
     control: --resume is then a no-op and --start-from runs only the target
@@ -1406,6 +1406,146 @@ def scenario_run_all_resume_integrity_gate():
     report("run_all_resume_start_from_cannot_bypass_source_checks", ok, detail)
 
 
+def scenario_run_all_output_inventory_gate():
+    """Director final correction 2 (2026-11-13): --resume / --start-from must
+    not produce a FALSE SUCCESSFUL NO-OP over deleted or modified GENERATED
+    OUTPUTS. A REAL full run_all pass over a synthetic exam (question JSON,
+    extracted image asset, validation / reconciliation reports) writes a
+    checkpoint with per-stage output inventories and an input baseline;
+    deleting or editing a generated output, swapping an asset binary,
+    silently changing toolkit code under an unchanged version label, or an
+    old checkpoint without inventories must each be refused (exit 3) or
+    forced into an explicit full stage-0 rebuild - never a green no-op."""
+    import certpassly as _cp
+
+    pdf = f"{A.base}/inventory-gate.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=792, height=612)
+    std_question(p1, 1, "Which synthetic output survives a resume?")
+    # a real extracted image asset: the builder writes it into assets/
+    img_rect = fitz.Rect(560, 70, 740, 240)
+    p1.insert_image(img_rect, stream=png_bytes(160, 150, lambda d: d.rectangle(
+        [10, 10, 150, 140], fill=(20, 90, 200), outline="black")))
+    doc.save(pdf)
+    orig = open(pdf, "rb").read()
+    sha = hashlib.sha256(orig).hexdigest()
+
+    r, out = run_pinned(pdf, "SYN-OR")
+    out_dir = f"{A.base}/structured/SYN-OR"
+    os.makedirs(out_dir, exist_ok=True)
+    subprocess.run(_engine_cmd("make_pmap") + [pdf,
+                    f"{A.base}/workspace/out/SYN-OR/media/src", f"{A.base}/pmap-SYN-OR.json"],
+                   capture_output=True, text=True)
+    cfgp = make_config("SYN-OR", pdf, out_dir, sha)
+    rb = subprocess.run(_engine_cmd("build_structured_v1") + [cfgp],
+                        capture_output=True, text=True)
+    ok, detail = rb.returncode == 0, f"builder exit {rb.returncode}"
+    if ok:
+        _patch_config(cfgp, expected=_derive_expected(out_dir),
+                      manifest={"pdf_repo_path": pdf, "extract_log_line": "synthetic adversarial",
+                                "inventory": [], "immutability_untouched": [], "immutability_added": []})
+
+        def runall(*extra):
+            return subprocess.run([sys.executable, "-m", "certpassly.phase1.run_all",
+                                   "--config", cfgp, "--upstream-scripts", A.upstream,
+                                   "--skip-adversarial", *extra],
+                                  capture_output=True, text=True)
+
+        ckpt = f"{A.base}/run-checkpoint.json"  # written next to the config
+        r_full = runall()
+        ckpt_bytes = open(ckpt, "rb").read() if os.path.exists(ckpt) else None
+        q1 = f"{out_dir}/questions/q001.json"
+        assets_dir = os.path.join(out_dir, "assets")
+        assets = [os.path.join(assets_dir, n) for n in sorted(os.listdir(assets_dir))] \
+            if os.path.isdir(assets_dir) else []
+        extraction_report = f"{out_dir}/extraction-report.json"
+        # positive control: verified no-op resume and single-stage start-from
+        r_resume = runall("--resume")
+        r_sf = runall("--start-from", "visual_qa")
+        r_resume2 = runall("--resume")
+        # negative: deleted question JSON -> resume AND start-from refuse
+        os.unlink(q1)
+        r_del = runall("--resume")
+        r_del_sf = runall("--start-from", "validate_structured_v1")
+        subprocess.run(_engine_cmd("build_structured_v1") + [cfgp],
+                       capture_output=True, text=True)  # restore the record
+        # negative: edited question JSON
+        saved = open(q1, "rb").read()
+        with open(q1, "r+b") as f:
+            f.write(b'{"tampered": true}')
+        r_edit = runall("--resume")
+        with open(q1, "wb") as f:
+            f.write(saved)
+        # negative: swapped asset binary (same name, different bytes)
+        r_swap = None
+        if assets:
+            victim = assets[0]
+            saved_a = open(victim, "rb").read()
+            with open(victim, "r+b") as f:
+                f.write(b"SWAPPED-BYTES-NOT-THE-EXTRACTED-IMAGE")
+            r_swap = runall("--resume")
+            with open(victim, "wb") as f:
+                f.write(saved_a)
+        # negative: deleted validation report
+        r_rep = None
+        if os.path.exists(extraction_report):
+            os.unlink(extraction_report)
+            r_rep = runall("--resume")
+        # negative: changed toolkit code with an UNCHANGED version label
+        probe = os.path.join(os.path.dirname(os.path.abspath(_cp.__file__)),
+                             "phase1", "p1common.py")
+        probe_orig = open(probe, "rb").read()
+        version_before = getattr(_cp, "__version__", "?")
+        try:
+            with open(probe, "ab") as f:  # comment-only drift; label unchanged
+                f.write(b"\n# adversarial toolkit-drift probe\n")
+            r_toolkit = runall("--resume")
+        finally:
+            with open(probe, "wb") as f:
+                f.write(probe_orig)
+        restored = open(probe, "rb").read() == probe_orig
+        # negative: old checkpoint without inventories (stripped, fingerprint
+        # intact) -> --resume must FULLY REBUILD (never a green no-op)
+        if os.path.exists(ckpt):
+            stale = json.loads(open(ckpt, "rb").read())
+            for s in stale.get("stages", []):
+                s.pop("outputs", None)
+            stale.pop("input_baseline", None)
+            json.dump(stale, open(ckpt, "w"))
+        r_old = runall("--resume")
+        rebuilt_all = False
+        if os.path.exists(ckpt):
+            after = json.loads(open(ckpt, "rb").read())
+            rebuilt_all = [s.get("stage") for s in after.get("stages", [])] == [
+                "audit_source", "build_structured_v1", "build_exports",
+                "make_source_manifest", "validate_structured_v1", "reconcile",
+                "visual_qa"]
+        # final positive control: everything intact -> verified no-op again
+        r_final = runall("--resume")
+        ok = (r_full.returncode == 0 and ckpt_bytes is not None
+              and r_resume.returncode == 0 and r_sf.returncode == 0
+              and r_resume2.returncode == 0
+              and r_del.returncode == 3 and r_del_sf.returncode == 3
+              and r_edit.returncode == 3
+              and (r_swap is None or r_swap.returncode == 3)
+              and (r_rep is None or r_rep.returncode == 3)
+              and r_toolkit.returncode == 3 and restored
+              and getattr(_cp, "__version__", "?") == version_before
+              and r_old.returncode == 0 and rebuilt_all
+              and r_final.returncode == 0)
+        detail = (f"full {r_full.returncode}; verified-noop resume "
+                  f"{r_resume.returncode}/{r_resume2.returncode}/{r_final.returncode}; "
+                  f"start-from-visual_qa {r_sf.returncode}; "
+                  f"deleted-q001 resume {r_del.returncode}/start-from {r_del_sf.returncode}; "
+                  f"edited-q001 {r_edit.returncode}; swapped-asset "
+                  f"{None if r_swap is None else r_swap.returncode}; "
+                  f"deleted-report {None if r_rep is None else r_rep.returncode}; "
+                  f"toolkit-drift {r_toolkit.returncode} (restored={restored}); "
+                  f"inventory-less-checkpoint resume {r_old.returncode} "
+                  f"rebuilt-all={rebuilt_all}")
+    report("run_all_resume_verifies_output_inventories", ok, detail)
+
+
 def main():
     global A
     ap = argparse.ArgumentParser()
@@ -1465,10 +1605,12 @@ def main():
     scenario_reconcile_claims_tamper()
     # --- director final-correction scenario (--resume/--start-from guard) ---
     scenario_run_all_resume_integrity_gate()
+    # --- director final-correction-2 scenario (output-inventory guard) ---
+    scenario_run_all_output_inventory_gate()
 
     passed = sum(1 for r_ in results if r_["passed"])
     print(f"\n===== ADVERSARIAL SUITE: {passed}/{len(results)} scenarios passed =====")
-    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2 + 1 final-correction guard)",
+    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2 + 2 final-correction guards)",
                date=A.date,
                synthetic_only=True,
                real_exam_data_used=False,

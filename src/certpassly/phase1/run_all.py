@@ -15,33 +15,54 @@ Behavior:
     the same config, pinned upstream checkout and source PDF reproduces the
     same outputs byte-identically (this is the canonical "resume" mode);
   - --resume / --start-from CANNOT bypass the source PDF SHA-256, identity or
-    integrity checks (director final correction, 2026-11-13). Before any stage
-    may be skipped a fail-closed SOURCE GUARD re-verifies, at resume time:
+    integrity checks (director final correction 1, 2026-11-13). Before any
+    stage may be skipped a fail-closed SOURCE GUARD re-verifies, at resume time:
     (1) the source PDF exists right now and still hashes to the config-pinned
     expected_pdf_sha256 / expected_bytes; (2) the prior checkpoint belongs to
     this config, carries the SAME source_fingerprint (actual PDF sha256+bytes,
-    config content sha256, pinned upstream scripts tree hash, engine label)
-    and an AUDIT_COMPLETE / non-identity-ambiguous audit summary; and (3) for
+    config content sha256, pinned upstream scripts tree hash, engine label AND
+    a content hash of the INSTALLED toolkit code tree) and an AUDIT_COMPLETE /
+    non-identity-ambiguous audit summary; and (3) for
     --start-from, every earlier planned stage exited 0 in that verified
     checkpoint. A guard refusal exits 3 (GUARD_REFUSED) without running any
     stage and without overwriting the existing checkpoint; the operator must
     re-run from stage 0 so the full audit re-verifies the source. --resume with
     a missing or foreign checkpoint cannot authorize skipping anything and
     degrades to a FULL run from stage 0 (loud notice, audit re-runs);
+  - --resume / --start-from also CANNOT produce a false successful no-op over
+    deleted or modified GENERATED OUTPUTS (director final correction 2,
+    2026-11-13). Every completed stage persists, in the checkpoint, a
+    deterministic output inventory (exact generated file paths + per-file
+    SHA-256, including question JSON records, image/asset binaries and QA /
+    validation / reconciliation reports) plus an input baseline of the
+    monitored pipeline inputs (pinned upstream split output, pmap, build-stats
+    sidecar, stage-0 audit record) - all bound to the source and engine
+    fingerprint recorded in the same checkpoint. Before --resume may no-op or
+    any stage may be skipped, an OUTPUT-INVENTORY GUARD re-hashes every
+    recorded file of the input baseline and of every skipped stage and
+    compares: a deleted or edited question JSON, a swapped asset binary, a
+    removed validation/reconciliation report or a tampered input is REFUSED
+    with exit 3 naming the file and the stage that wrote it. A checkpoint that
+    predates output inventories cannot authorize skipping anything: --resume
+    degrades to an explicit FULL run from stage 0, --start-from refuses
+    (exit 3);
   - --start-from <stage>: begin at a named stage (stage names as listed above)
-    - only over a verified prior checkpoint with all earlier stages passed;
+    - only over a verified prior checkpoint with all earlier stages passed AND
+    all their recorded outputs verified intact;
   - --dry-run: print the planned stage commands without executing anything
-    (the source guard still runs and reports its verdict for --resume /
+    (both guards still run and report their verdicts for --resume /
     --start-from so a would-be refusal is visible without side effects);
   - stops at the first non-zero stage and records it in the checkpoint
     (audit BLOCK exit 2, validation/reconciliation failures exit 1, and -
     since the P0-1 correction - visual_qa MACHINE VISIBILITY FAILURE exit 2);
   - writes a per-stage checkpoint log next to the config (run-checkpoint.json)
-    that includes the verified source_fingerprint and the audit summary read
-    back from the stage-0 audit record.
+    that includes the verified source_fingerprint, the audit summary read
+    back from the stage-0 audit record, the input baseline and, per passed
+    stage, its output inventory.
 
 Exit codes: 0 = all stages passed; 1/2 = a stage failed (propagated);
-3 = source-guard refusal (--resume / --start-from integrity precondition).
+3 = source-guard or output-inventory-guard refusal (--resume / --start-from
+integrity precondition).
 
 Stages run via ``python -m certpassly.phase1.<stage>`` so the installed (or
 PYTHONPATH-visible) public skill package is the engine; there is no private
@@ -61,14 +82,18 @@ STAGES = [
 ]
 
 ENGINE_LABEL = "certpassly.phase1 (public certpassly-exam-skill)"
-GUARD_EXIT = 3  # distinct, documented refusal code for the source guard
+GUARD_EXIT = 3  # distinct, documented refusal code for both guards
+INVENTORY_VERSION = 1  # output-inventory checkpoint format (correction 2)
 
 # fingerprint components compared between the prior checkpoint and the
 # current run; every component must match exactly for skipping to be allowed.
+# toolkit_root is recorded for transparency but intentionally NOT compared:
+# what authorizes skipping is the CONTENT hash of the installed toolkit, not
+# where it is installed (a relocated identical venv must not refuse).
 _FINGERPRINT_KEYS = (
     "pdf_sha256", "pdf_bytes", "pdf_path",
     "config_sha256", "upstream_scripts", "upstream_tree_sha256",
-    "engine",
+    "engine", "toolkit_version", "toolkit_tree_sha256",
 )
 
 
@@ -80,18 +105,24 @@ def _file_sha256(path):
     return h.hexdigest()
 
 
-def _tree_sha256(root):
+def _tree_sha256(root, all_files=False):
     """Stable content hash of a scripts tree: sorted relative paths + bytes of
-    every ``*.py`` file (the pinned upstream extractor is pure Python). Used so
-    that swapping the pinned upstream scripts invalidates --resume/--start-from
-    even when the PDF and config are untouched."""
+    every ``*.py`` file (the pinned upstream extractor is pure Python), or -
+    with ``all_files=True`` - of every regular file (used for the INSTALLED
+    toolkit tree, whose templates are data, not code). Used so that swapping
+    the pinned upstream scripts, or silently updating the toolkit code under
+    an unchanged version label, invalidates --resume/--start-from even when
+    the PDF and config are untouched."""
     h = hashlib.sha256()
     if not os.path.isdir(root):
         return h.hexdigest()
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for fn in sorted(filenames):
-            if not fn.endswith(".py"):
+            if not all_files and not fn.endswith(".py"):
+                continue
+            if fn.endswith((".pyc", ".pyo")) or fn == ".DS_Store":
                 continue
             p = os.path.join(dirpath, fn)
             h.update(os.path.relpath(p, root).encode("utf-8"))
@@ -99,6 +130,21 @@ def _tree_sha256(root):
                 for chunk in iter(lambda: f.read(1 << 20), b""):
                     h.update(chunk)
     return h.hexdigest()
+
+
+def toolkit_fingerprint():
+    """Fingerprint the INSTALLED toolkit code, not a fixed label: the content
+    hash of the certpassly package tree this interpreter resolves (plus its
+    declared __version__). Stages run via ``python -m certpassly.phase1.*``
+    with this same interpreter, so the hashed tree is the code that runs."""
+    import certpassly
+    pkg_dir = os.path.dirname(os.path.abspath(certpassly.__file__))
+    return dict(
+        engine=ENGINE_LABEL,
+        toolkit_version=str(getattr(certpassly, "__version__", "unknown")),
+        toolkit_root=pkg_dir,
+        toolkit_tree_sha256=_tree_sha256(pkg_dir, all_files=True),
+    )
 
 
 def audit_out_path(a):
@@ -121,14 +167,17 @@ def read_audit_summary(a):
 
 def source_fingerprint(a, cfg):
     """Recompute the CURRENT source fingerprint (measured from the actual
-    files at run start - never from the checkpoint or any cached value)."""
+    files at run start - never from the checkpoint or any cached value). The
+    engine component is the INSTALLED toolkit content hash, so a silent
+    toolkit update under an unchanged version label cannot reuse a prior
+    checkpoint."""
     pdf = cfg["paths"]["pdf"]
     fp = dict(
         config_sha256=_file_sha256(a.config),
         pdf_path=os.path.abspath(pdf),
         upstream_scripts=os.path.abspath(a.upstream_scripts),
         upstream_tree_sha256=_tree_sha256(a.upstream_scripts),
-        engine=ENGINE_LABEL,
+        **toolkit_fingerprint(),
     )
     if os.path.isfile(pdf):
         fp["pdf_sha256"] = _file_sha256(pdf)
@@ -136,12 +185,149 @@ def source_fingerprint(a, cfg):
     return fp
 
 
+# ---------------- output inventories (director final correction 2) --------
+
+def monitored_paths(a, cfg):
+    """(dir_roots, file_paths) monitored by the output inventory: the
+    structured out_dir tree, the pinned upstream split output, the pmap and
+    build-stats sidecars and the stage-0 audit record - i.e. every input the
+    stages read and every output they write, except the PDF / config /
+    upstream scripts, which the source fingerprint pins separately."""
+    p = cfg.get("paths", {}) or {}
+    dirs, files = [], []
+    for key in ("out_dir", "upstream_out"):
+        v = p.get(key)
+        if v and os.path.isdir(v):
+            dirs.append(os.path.abspath(v))
+    for v in (audit_out_path(a), p.get("build_stats"), p.get("pmap")):
+        if v and os.path.isfile(v):
+            files.append(os.path.abspath(v))
+    return dirs, files
+
+
+def _untracked(a, cfg):
+    """Absolute paths never included in an inventory: the config, the
+    checkpoint itself and the source PDF (all fingerprinted or self)."""
+    p = cfg.get("paths", {}) or {}
+    out = {os.path.abspath(a.config), os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(a.config)), "run-checkpoint.json"))}
+    if p.get("pdf"):
+        out.add(os.path.abspath(p["pdf"]))
+    return out
+
+
+def snapshot_outputs(a, cfg):
+    """Deterministic {abs_path: sha256} of every monitored file RIGHT NOW."""
+    dirs, files = monitored_paths(a, cfg)
+    skip = _untracked(a, cfg)
+    snap = {}
+    for root in dirs:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames.sort()
+            for fn in sorted(filenames):
+                ap = os.path.abspath(os.path.join(dirpath, fn))
+                if ap in skip:
+                    continue
+                try:
+                    snap[ap] = _file_sha256(ap)
+                except OSError:
+                    continue  # unreadable right now: simply untracked
+    for f in files:
+        if f in skip:
+            continue
+        try:
+            snap[f] = _file_sha256(f)
+        except OSError:
+            continue
+    return snap
+
+
+def _inv_entries(snap):
+    """Sorted checkpoint-format inventory entries for a {path: sha} snapshot."""
+    entries = []
+    for p in sorted(snap):
+        try:
+            entries.append(dict(path=p, sha256=snap[p], bytes=os.path.getsize(p)))
+        except OSError:
+            continue
+    return entries
+
+
+def _stage_delta(before, after):
+    """Inventory entries for the files a stage ADDED or MODIFIED
+    (deterministic: sorted by path; later stages legitimately rewrite earlier
+    files, and verification accumulates expectations in plan order)."""
+    changed = {p for p in after if before.get(p) != after[p]}
+    return _inv_entries({p: after[p] for p in changed})
+
+
+def verify_prior_outputs(a, cfg, prior, plan, skip_names):
+    """Fail-closed verification of the artifacts of the stages that would be
+    SKIPPED (director final correction 2: no false successful no-op over
+    deleted or modified outputs). The prior checkpoint must carry - and the
+    disk must still match - (1) the input baseline recorded at the start of
+    the verified run and (2) every skipped stage's output inventory.
+
+    Returns ``(action, reason)``:
+      ``("allow", "")``        every recorded artifact is intact - skipping safe;
+      ``("cannot_verify", m)`` the checkpoint predates output inventories -
+                              it cannot authorize skipping anything;
+      ``("refuse", m)``       recorded artifacts are missing or modified -
+                              integrity violation, exit GUARD_EXIT.
+    """
+    if not skip_names:
+        return ("allow", "")
+    base = prior.get("input_baseline")
+    if not isinstance(base, list) or not base:
+        return ("cannot_verify", "the checkpoint records no input baseline "
+                "(it predates output-inventory verification)")
+    entries = {s.get("stage"): s for s in prior.get("stages", [])
+               if isinstance(s, dict)}
+    no_inv = [n for n in skip_names
+              if not isinstance(entries.get(n, {}).get("outputs"), list)]
+    if no_inv:
+        return ("cannot_verify", f"no output inventory recorded for passed "
+                f"stage(s) {no_inv}; the checkpoint predates per-stage output "
+                f"verification")
+    current = snapshot_outputs(a, cfg)
+    # expected state = the input baseline, OVERRIDDEN in plan order by every
+    # skipped stage's recorded outputs (a later stage legitimately rewrites
+    # files that existed when the run started)
+    expected = {e.get("path"): e.get("sha256") for e in base
+                if isinstance(e, dict) and e.get("path")}
+    owners = {}
+    for name, _ in plan:
+        if name in skip_names:
+            for e in entries[name]["outputs"]:
+                if isinstance(e, dict) and e.get("path"):
+                    expected[e["path"]] = e.get("sha256")
+                    owners[e["path"]] = name
+    bad = sorted(p for p, s in expected.items() if current.get(p) != s)
+    if bad:
+        bad_outputs = [p for p in bad if p in owners]
+        bad_inputs = [p for p in bad if p not in owners]
+        if bad_outputs:
+            shown = "; ".join(f"{p} (written by {owners[p]})" for p in bad_outputs[:5])
+            shown += " ..." if len(bad_outputs) > 5 else ""
+            return ("refuse", f"output_inventory_mismatch: {len(bad_outputs)} "
+                    f"generated output file(s) missing or modified since the "
+                    f"verified run: {shown}; re-run from stage 0 so every "
+                    f"stage rebuilds and re-verifies its artifacts")
+        shown = ", ".join(bad_inputs[:5]) + (" ..." if len(bad_inputs) > 5 else "")
+        return ("refuse", f"input_baseline_mismatch: {len(bad_inputs)} recorded "
+                f"input file(s) missing or modified since the verified run "
+                f"({shown}); re-run from stage 0")
+    return ("allow", "")
+
+
 def enforce_source_guard(a, cfg, prior, fp):
     """Fail-closed precondition for --resume / --start-from.
 
     Neither flag may bypass the source PDF SHA-256 / identity / integrity
     checks, so before any stage may be skipped this guard re-verifies the
-    source RIGHT NOW and the checkpoint's right to represent it.
+    source RIGHT NOW and the checkpoint's right to represent it (including
+    that the installed toolkit code still hashes to the fingerprint the
+    checkpoint recorded).
 
     Returns ``(action, reason)``:
       ``("allow", "")``    skipping is safe (all checks passed);
@@ -266,13 +452,14 @@ def run_cli(argv=None):
                     help="print the planned stage commands and exit 0 without running")
     ap.add_argument("--resume", action="store_true",
                     help="skip stages that already exited 0 in a prior checkpoint with "
-                         "the same config AND the same verified source fingerprint; "
-                         "otherwise run everything from stage 0 (never skips the "
-                         "source checks)")
+                         "the same config, the same verified source fingerprint AND "
+                         "all their recorded outputs still intact on disk; otherwise "
+                         "run everything from stage 0 (never skips the source checks "
+                         "or the output-inventory verification)")
     ap.add_argument("--start-from", choices=STAGES + ["adversarial"],
                     help="begin at the named stage; requires a verified prior "
-                         "checkpoint of this config whose earlier stages all "
-                         "exited 0 (the source guard still re-verifies the PDF)")
+                         "checkpoint of this config whose earlier stages all exited 0 "
+                         "and whose recorded outputs verify (both guards still run)")
     a = ap.parse_args(argv)
 
     cfg = json.load(open(a.config, encoding='utf-8'))
@@ -297,7 +484,8 @@ def run_cli(argv=None):
         return 2
 
     # ---- source guard: --resume / --start-from cannot bypass the source
-    # PDF SHA-256 / identity / integrity checks (director final correction) ----
+    # PDF SHA-256 / identity / integrity checks (director final correction 1) ----
+    guard_ok = True
     if a.resume or a.start_from:
         action, reason = enforce_source_guard(a, cfg, prior, fp)
         if a.dry_run:
@@ -318,64 +506,104 @@ def run_cli(argv=None):
                 return GUARD_EXIT
             # --resume with a checkpoint that cannot authorize skipping: run
             # EVERYTHING from stage 0 - the audit re-verifies the source.
+            guard_ok = False
             print(f"NOTICE: --resume cannot use this checkpoint ({reason}); "
                   f"running ALL stages from stage 0 - nothing is skipped.")
 
-    if a.dry_run:
-        print("=== run_all DRY RUN (no stages executed) ===")
-        for name, args in plan:
-            print(f"  [plan] {name}: {' '.join(args)}")
-        if prior:
-            print(f"  prior checkpoint: overall_exit={prior.get('overall_exit')} "
-                  f"finished={prior.get('finished')}")
-        print(f"checkpoint file (not written in dry-run): {ckpt_path}")
-        return 0
-
-    # --resume: stages with exit 0 in a prior GUARD-VERIFIED run of the SAME
-    # config are skipped up to the first stage that did not pass.
-    skip_until = None
+    # ---- plan which stages --resume / --start-from would SKIP -------------
+    # (a stage may only be skipped if it exited 0 in the prior checkpoint of
+    # THIS config; the maximal passed prefix of the plan is skippable)
+    skip_names = []
     all_done = False
     if a.resume and prior and prior.get("config") == os.path.abspath(a.config):
-        passed = [s["stage"] for s in prior.get("stages", []) if s.get("exit_code") == 0]
-        seen_failed = False
+        passed = {s["stage"] for s in prior.get("stages", [])
+                  if isinstance(s, dict) and s.get("exit_code") == 0}
         for name, _ in plan:
-            if name in passed and not seen_failed:
-                continue
-            if name not in passed:
-                seen_failed = True
-            skip_until = name
-            break
-        else:
-            all_done = True
+            if name in passed:
+                skip_names.append(name)
+            else:
+                break
+        all_done = (len(skip_names) == len(plan))
     if a.start_from:
         # prerequisites: every planned stage BEFORE the start stage must have
         # exited 0 in the guard-verified checkpoint
         names = [name for name, _ in plan]
         passed = {s["stage"] for s in prior.get("stages", [])
-                  if s.get("exit_code") == 0}
+                  if isinstance(s, dict) and s.get("exit_code") == 0}
         missing = [n for n in names[:names.index(a.start_from)] if n not in passed]
         if missing:
             print(f"ERROR: --start-from {a.start_from}: earlier stage(s) {missing} "
                   f"did not exit 0 in the verified checkpoint; refusing to skip "
                   f"them.", file=sys.stderr)
             return GUARD_EXIT
-        skip_until = a.start_from
-        all_done = False
+        skip_names = names[:names.index(a.start_from)]
 
-    if all_done:
-        print("=== run_all resume: every stage already complete (checkpoint "
-              f"{ckpt_path}); nothing to do ===")
+    # ---- output-inventory guard: before --resume may no-op or any stage may
+    # be skipped, every skipped stage's recorded outputs (and the input
+    # baseline) are re-hashed and compared - a deleted or modified question
+    # JSON / asset binary / QA report can never yield a false successful
+    # no-op (director final correction 2) ----
+    if (a.resume or a.start_from) and skip_names and guard_ok:
+        vaction, vreason = verify_prior_outputs(a, cfg, prior, plan, skip_names)
+        if a.dry_run:
+            print(f"  output-inventory guard (dry-run): {vaction}"
+                  + (f" - {vreason}" if vreason else ""))
+        if vaction == "refuse":
+            print(f"ERROR: output-inventory guard refused --resume/--start-from: "
+                  f"{vreason}", file=sys.stderr)
+            print("       Nothing was run and the existing checkpoint was left "
+                  "untouched. Re-run WITHOUT --resume/--start-from so every "
+                  "stage rebuilds and re-verifies its artifacts.", file=sys.stderr)
+            return GUARD_EXIT
+        if vaction == "cannot_verify":
+            if a.start_from:
+                print(f"ERROR: --start-from {a.start_from}: {vreason}; refusing "
+                      f"to skip stages whose artifacts cannot be verified.",
+                      file=sys.stderr)
+                return GUARD_EXIT
+            # --resume cannot verify the recorded artifacts: an explicit FULL
+            # rebuild from stage 0 - never a green no-op.
+            print(f"NOTICE: --resume cannot verify this checkpoint's artifacts "
+                  f"({vreason}); running ALL stages from stage 0 - nothing is "
+                  f"skipped.")
+            skip_names, all_done = [], False
+
+    if a.dry_run:
+        print("=== run_all DRY RUN (no stages executed) ===")
+        for name, args in plan:
+            note = "  [verified: would skip]" if name in skip_names else ""
+            print(f"  [plan] {name}: {' '.join(args)}{note}")
+        if prior:
+            print(f"  prior checkpoint: overall_exit={prior.get('overall_exit')} "
+                  f"finished={prior.get('finished')}")
+        print(f"checkpoint file (not written in dry-run): {ckpt_path}")
         return 0
 
-    log, rc, started = [], 0, False
+    if all_done:
+        print("=== run_all resume: every stage already complete and every recorded "
+              f"output verified against the checkpoint ({ckpt_path}); nothing to "
+              f"do ===")
+        return 0
+
+    # ---- run the planned stages, skipping only the VERIFIED ones ----------
+    base_snap = snapshot_outputs(a, cfg)  # input baseline at run START
+    snap = dict(base_snap)
+    skip = set(skip_names)
+    log, rc = [], 0
     for name, args in plan:
-        if skip_until and not started:
-            if name != skip_until:
-                print(f"--- stage: {name} --- skipped (--start-from/--resume)")
-                continue
-            started = True
+        if name in skip:
+            print(f"--- stage: {name} --- skipped (--start-from/--resume; "
+                  "recorded outputs verified)")
+            continue
         if rc == 0:
             rc |= run_stage(name, args, log)
+            if (log and isinstance(log[-1], dict) and log[-1].get("stage") == name
+                    and log[-1].get("exit_code") == 0):
+                # persist what this stage actually wrote (deterministic
+                # inventory: exact generated file paths + SHA-256)
+                after = snapshot_outputs(a, cfg)
+                log[-1]["outputs"] = _stage_delta(snap, after)
+                snap = after
         else:
             log.append(dict(stage=name, command=" ".join(args), exit_code=None,
                             tail="not run: an earlier stage failed"))
@@ -385,7 +613,9 @@ def run_cli(argv=None):
                engine=ENGINE_LABEL,
                source_fingerprint=fp,
                audit=read_audit_summary(a),
-               resume=bool(a.resume), start_from=a.start_from or None)
+               resume=bool(a.resume), start_from=a.start_from or None,
+               inventory_version=INVENTORY_VERSION,
+               input_baseline=_inv_entries(base_snap))
     with open(ckpt_path, "w", encoding='utf-8') as f:
         json.dump(out, f, indent=1, ensure_ascii=False)
     print(f"=== run_all overall exit {rc} (checkpoint: {ckpt_path}) ===")

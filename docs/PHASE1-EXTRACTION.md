@@ -109,24 +109,42 @@ git -C vendor/certpassly-exam-pipeline rev-parse HEAD
 - **Stage checkpoints**: `certpassly phase1-extract` writes
   `run-checkpoint.json` next to the config, including the verified
   `source_fingerprint` (actual PDF SHA-256/bytes, config content hash, pinned
-  upstream scripts tree hash, engine) and the stage-0 audit summary.
-  `--resume` skips stages that already exited 0 for the same config AND the
-  same verified source fingerprint, and continues at the first incomplete
-  stage; `--start-from <stage>` begins at a named stage over a verified
-  checkpoint whose earlier stages all exited 0; `--dry-run` prints the
-  planned commands and executes nothing (the guard still reports its
-  verdict).
-- **Resume cannot bypass the source checks** (director final correction,
+  upstream scripts tree hash, engine label AND a content hash of the
+  installed toolkit code tree), the stage-0 audit summary, an input baseline
+  (SHA-256 of every monitored pipeline input: pinned upstream split output,
+  pmap, build-stats sidecar, audit record) and, per passed stage, its output
+  inventory (exact generated file paths + per-file SHA-256).
+  `--resume` skips stages that already exited 0 for the same config, the same
+  verified source fingerprint AND all their recorded outputs verified intact
+  on disk; `--start-from <stage>` begins at a named stage over a verified
+  checkpoint whose earlier stages all exited 0 and whose recorded outputs
+  verify; `--dry-run` prints the planned commands and executes nothing (both
+  guards still report their verdicts).
+- **Resume cannot bypass the source checks** (director final correction 1,
   2026-11-13): before ANY stage may be skipped, a fail-closed source guard
   re-verifies at resume time that the source PDF still exists and hashes to
   the config-pinned `expected_pdf_sha256`/`expected_bytes`, that the
   checkpoint embeds an `AUDIT_COMPLETE`/non-ambiguous audit of that exact
-  source, and (for `--start-from`) that every earlier stage passed. A
-  changed/missing PDF, an edited config, a swapped upstream pin or a stale
-  checkpoint refuses with **exit 3** before any stage runs, leaving the
-  checkpoint untouched; re-run from stage 0 so the audit re-verifies.
-  `--resume` with a missing/foreign checkpoint cannot authorize skipping and
-  degrades to a FULL run from stage 0 (audit re-runs, nothing is skipped).
+  source, that the installed toolkit code still hashes to the recorded
+  fingerprint (a silent toolkit update under an unchanged version label
+  refuses), and (for `--start-from`) that every earlier stage passed. A
+  changed/missing PDF, an edited config, a swapped upstream pin, silently
+  changed toolkit code or a stale checkpoint refuses with **exit 3** before
+  any stage runs, leaving the checkpoint untouched; re-run from stage 0 so
+  the audit re-verifies. `--resume` with a missing/foreign checkpoint cannot
+  authorize skipping and degrades to a FULL run from stage 0 (audit re-runs,
+  nothing is skipped).
+- **Resume cannot no-op over tampered outputs** (director final correction
+  2, 2026-11-13): before `--resume` may return a green no-op or any stage may
+  be skipped, an output-inventory guard re-hashes the input baseline and
+  every skipped stage's recorded outputs and compares. A deleted or edited
+  question JSON record, a swapped asset/image binary, a removed
+  validation/reconciliation/QA report or a tampered pipeline input refuses
+  with **exit 3** naming the file and the stage that wrote it, before any
+  stage runs, leaving the checkpoint untouched. A checkpoint that predates
+  output inventories cannot authorize skipping anything: `--resume` degrades
+  to an explicit FULL rebuild from stage 0 (loud notice, nothing skipped),
+  `--start-from` refuses (exit 3). Never a green no-op without verification.
 - **Per-stage idempotence**: each stage only reads its declared inputs
   (source PDF, pinned extractor output, config) and rewrites its own outputs.
 
@@ -242,7 +260,9 @@ private adapters may remain.
 | `FATAL: directory does not exist` (adversarial) | wrong upstream path | pass the pinned checkout's `scripts/` dir; verify the pin SHA |
 | `Unapproved upstream version` | checkout pin mismatch | stop and report; do not silently repin |
 | stage fails mid-pipeline | genuine source/layout issue | inspect `run-checkpoint.json`; fix the cause; `--resume` after the fix |
-| `source guard refused --resume/--start-from` (exit 3) | the source PDF changed/went missing, the config or upstream pin was edited, or the checkpoint is stale | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so the audit re-verifies the source |
+| `source guard refused --resume/--start-from` (exit 3) | the source PDF changed/went missing, the config or upstream pin was edited, the installed toolkit code changed, or the checkpoint is stale | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so the audit re-verifies the source |
+| `output-inventory guard refused --resume/--start-from` (exit 3) | a generated output (question JSON, asset binary, QA/validation/reconciliation report) was deleted or modified after the verified run, or a monitored pipeline input changed | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so every stage rebuilds and re-verifies its artifacts |
+| `NOTICE: --resume cannot verify this checkpoint's artifacts` | the checkpoint predates output-inventory verification (old format) | expected fail-closed behavior: all stages re-run from stage 0; nothing is skipped |
 | wrong toolkit version | unpinned checkout | `git checkout <full-sha>`; `certpassly phase1-info` |
 
 **Rollback**: the toolkit only writes into the private `structured/v1` tree

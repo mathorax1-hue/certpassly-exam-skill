@@ -1,18 +1,27 @@
 """Public synthetic tests: stage orchestrator logic (dry-run, resume,
-start-from validation, stop-at-first-failure, checkpoint writing) and the
+start-from validation, stop-at-first-failure, checkpoint writing), the
 fail-closed SOURCE GUARD for --resume / --start-from (director final
-correction, 2026-11-13): neither flag may bypass the source PDF SHA-256 /
-identity / integrity checks.
+correction 1, 2026-11-13: neither flag may bypass the source PDF SHA-256 /
+identity / integrity checks) and the fail-closed OUTPUT-INVENTORY GUARD
+(director final correction 2, 2026-11-13: neither flag may produce a false
+successful no-op over deleted or modified generated outputs - question JSON,
+asset binaries, validation/reconciliation/QA reports - or over a silently
+changed toolkit; a checkpoint that predates inventories cannot authorize
+skipping anything).
 
 The stage execution is faked via monkeypatching run_stage so the orchestration
 logic itself is testable on a stdlib-only environment; the fake is
 contract-accurate: a passing audit_source "stage" writes the same
 source-audit.json record the real stage-0 audit leaves behind (the checkpoint
-writer embeds its verdict). The REAL end-to-end pipeline (real stages,
-including the guard against tampered/missing PDFs and stale checkpoints) is
-exercised by the adversarial suite and the private integration runs.
+writer embeds its verdict), and the output-writing variant additionally
+writes the real-world-shaped output files each stage produces. The REAL
+end-to-end pipeline (real stages, including both guards against
+tampered/missing PDFs, stale checkpoints and tampered outputs) is exercised
+by the adversarial suite and the private integration runs.
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -20,6 +29,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import certpassly
 from certpassly.phase1 import run_all
 
 from phase1_fixture import build_fixture
@@ -366,6 +376,315 @@ class RunAllTests(unittest.TestCase):
             rc = self._run("--dry-run", "--resume")
         self.assertEqual(rc, run_all.GUARD_EXIT)
         rs.assert_not_called()
+
+
+class RunAllOutputInventoryTests(RunAllTests):
+    """Director final correction 2: --resume / --start-from may never produce
+    a false successful no-op over deleted or modified GENERATED OUTPUTS. The
+    stage fake below is contract-accurate about WHAT each stage writes, so
+    the checkpoint records real inventories and the guard has real files to
+    verify."""
+
+    STAGE_FILES = {
+        "build_structured_v1": [
+            ("structured/v1/questions/q001.json",
+             '{"question_id": "q001", "note": "synthetic stage output"}\n'),
+            ("structured/v1/questions/q002.json",
+             '{"question_id": "q002", "note": "synthetic stage output"}\n'),
+            # the real builder extracts image binaries into assets/: the fake
+            # writes one so asset tampering is caught as an OUTPUT violation
+            ("structured/v1/assets/synthetic-answer-reference-image.png",
+             b"synthetic-extracted-answer-reference-image-bytes"),
+        ],
+        "build_exports": [
+            ("structured/v1/export/site-format-v1-draft/export-blockers.json",
+             '{"rows": 5, "note": "synthetic stage output"}\n'),
+        ],
+        "make_source_manifest": [
+            ("structured/v1/source-manifest.json",
+             '{"note": "synthetic stage output"}\n'),
+        ],
+        "validate_structured_v1": [
+            ("structured/v1/extraction-report.json",
+             '{"checks": "62/62 synthetic", "note": "stage output"}\n'),
+        ],
+        "reconcile": [
+            ("structured/v1/reconciliation.json",
+             '{"checks": "26/26 synthetic", "note": "stage output"}\n'),
+        ],
+        "visual_qa": [
+            ("structured/v1/qa/visual-qa-report.json",
+             '{"machine_visibility": {"failed": false}, "note": "stage output"}\n'),
+        ],
+    }
+
+    def _fake_stages(self, codes=None, ran=None, write_outputs=True):
+        """Contract-accurate fake: a passing audit_source writes the
+        source-audit.json record, and every other passing stage writes its
+        real-world-shaped output files under the fixture root."""
+        codes = iter(codes) if codes is not None else None
+
+        def fake(name, args, log):
+            code = next(codes, 0) if codes is not None else 0
+            if code == 0:
+                if name == "audit_source":
+                    with open(os.path.join(self.root, "source-audit.json"),
+                              "w", encoding="utf-8") as f:
+                        json.dump({"verdict": "AUDIT_COMPLETE",
+                                   "pdf": {"sha256": self.pdf_sha,
+                                           "bytes": os.path.getsize(self.pdf)},
+                                   "identity_ambiguous": False}, f)
+                elif write_outputs:
+                    for rel, content in self.STAGE_FILES.get(name, []):
+                        p = os.path.join(self.root, rel)
+                        os.makedirs(os.path.dirname(p), exist_ok=True)
+                        if isinstance(content, bytes):
+                            with open(p, "wb") as f:
+                                f.write(content)
+                        else:
+                            with open(p, "w", encoding="utf-8") as f:
+                                f.write(content)
+            if ran is not None:
+                ran.append(name)
+            log.append(dict(stage=name, command=" ".join(args),
+                            exit_code=code, tail=""))
+            return code
+        return fake
+
+    def _pass_run(self, ran=None):
+        with mock.patch.object(run_all, "run_stage",
+                               side_effect=self._fake_stages(ran=ran)):
+            return self._run()
+
+    def _refuse_capture(self, *extra):
+        """Run with stderr captured; return (rc, stderr_text)."""
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = self._run(*extra)
+        return rc, buf.getvalue()
+
+    # ---- checkpoint records what each stage actually wrote ----------------
+
+    def test_checkpoint_records_output_inventories_and_baseline(self):
+        self._pass_run()
+        out = json.loads(open(self.ckpt).read())
+        self.assertEqual(out["inventory_version"], 1)
+        base = {e["path"]: e["sha256"] for e in out["input_baseline"]}
+        # the monitored pipeline inputs are pinned in the baseline
+        split = os.path.join(self.root, "upstream-out", "extracted", "split.json")
+        self.assertIn(split, base)
+        self.assertEqual(base[split],
+                         hashlib.sha256(open(split, "rb").read()).hexdigest())
+        stages = {s["stage"]: s for s in out["stages"]}
+        self.assertIn("outputs", stages["build_structured_v1"])
+        wrote = {e["path"] for e in stages["build_structured_v1"]["outputs"]}
+        self.assertIn(os.path.join(self.root, "structured/v1/questions/q001.json"), wrote)
+        # every recorded sha matches the actual file bytes
+        for e in stages["build_structured_v1"]["outputs"]:
+            self.assertEqual(
+                e["sha256"], hashlib.sha256(open(e["path"], "rb").read()).hexdigest())
+        # toolkit fingerprint: content hash of the installed package, not a label
+        fp = out["source_fingerprint"]
+        self.assertIn("toolkit_tree_sha256", fp)
+        self.assertEqual(fp["toolkit_version"], certpassly.__version__)
+        self.assertEqual(fp["toolkit_tree_sha256"],
+                         run_all.toolkit_fingerprint()["toolkit_tree_sha256"])
+
+    # ---- NEGATIVE: deleted / edited generated outputs ---------------------
+
+    def test_resume_refused_when_question_json_deleted(self):
+        """Deleting a generated question record after a completed run must
+        make --resume refuse (exit 3) naming the file and its stage - the old
+        logic returned a green no-op without opening any output file."""
+        self._pass_run()
+        before = open(self.ckpt, "rb").read()
+        q1 = os.path.join(self.root, "structured/v1/questions/q001.json")
+        os.unlink(q1)
+        ran = []
+        with mock.patch.object(run_all, "run_stage",
+                               side_effect=self._fake_stages(ran=ran)):
+            rc, err = self._refuse_capture("--resume")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        self.assertEqual(ran, [], "no stage may run after an inventory refusal")
+        self.assertIn("output_inventory_mismatch", err)
+        self.assertIn("q001.json", err)
+        self.assertIn("build_structured_v1", err)
+        self.assertEqual(open(self.ckpt, "rb").read(), before,
+                         "an inventory refusal must not overwrite the checkpoint")
+
+    def test_resume_refused_when_question_json_edited(self):
+        self._pass_run()
+        q2 = os.path.join(self.root, "structured/v1/questions/q002.json")
+        with open(q2, "w", encoding="utf-8") as f:
+            f.write('{"question_id": "q002", "tampered": true}\n')
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--resume")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("output_inventory_mismatch", err)
+        self.assertIn("q002.json", err)
+
+    def test_resume_refused_when_asset_bytes_swapped(self):
+        """A swapped answer-reference image binary (same name, different
+        bytes) must refuse the resume."""
+        self._pass_run()
+        victim = "synthetic-answer-reference-image.png"
+        p = os.path.join(self.root, "structured/v1/assets", victim)
+        with open(p, "wb") as f:
+            f.write(b"swapped-image-bytes-not-the-extracted-binary")
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--resume")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("output_inventory_mismatch", err)
+        self.assertIn(victim, err)
+        self.assertIn("build_structured_v1", err)
+
+    def test_resume_refused_when_validation_or_reconciliation_report_deleted(self):
+        self._pass_run()
+        for rel in ("structured/v1/extraction-report.json",
+                    "structured/v1/reconciliation.json"):
+            p = os.path.join(self.root, rel)
+            self.assertTrue(os.path.exists(p))
+            os.unlink(p)
+            with mock.patch.object(run_all, "run_stage") as rs:
+                rc, err = self._refuse_capture("--resume")
+            self.assertEqual(rc, run_all.GUARD_EXIT, rel)
+            rs.assert_not_called()
+            self.assertIn("output_inventory_mismatch", err)
+            self.assertIn(os.path.basename(rel), err)
+
+    def test_start_from_refused_when_skipped_output_modified(self):
+        """--start-from must not skip stages whose recorded outputs were
+        tampered with, even when the source PDF is intact."""
+        self._pass_run()
+        blockers = os.path.join(
+            self.root, "structured/v1/export/site-format-v1-draft/export-blockers.json")
+        with open(blockers, "w", encoding="utf-8") as f:
+            f.write('{"rows": 0, "tampered": true}\n')
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--start-from", "validate_structured_v1")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("export-blockers.json", err)
+        self.assertIn("build_exports", err)
+
+    def test_start_from_allows_when_only_later_stage_output_modified(self):
+        """Precision control: only the SKIPPED stages' outputs gate the
+        bypass. Tampering an output of a stage that will re-run anyway (here
+        reconcile's report, starting at validate) does not refuse - the
+        re-run regenerates it."""
+        self._pass_run()
+        os.unlink(os.path.join(self.root, "structured/v1/reconciliation.json"))
+        ran = []
+        with mock.patch.object(run_all, "run_stage",
+                               side_effect=self._fake_stages(ran=ran)):
+            rc = self._run("--start-from", "validate_structured_v1")
+        self.assertEqual(rc, 0)
+        self.assertEqual(ran, ["validate_structured_v1", "reconcile", "visual_qa"])
+        self.assertTrue(os.path.exists(
+            os.path.join(self.root, "structured/v1/reconciliation.json")))
+
+    # ---- NEGATIVE: tampered inputs and silently changed toolkit ------------
+
+    def test_resume_refused_when_input_baseline_modified(self):
+        """A modified pipeline INPUT (the pinned upstream split) is an
+        integrity violation even though no stage output changed."""
+        self._pass_run()
+        split = os.path.join(self.root, "upstream-out", "extracted", "split.json")
+        with open(split, "w", encoding="utf-8") as f:
+            json.dump({"tampered": True}, f)
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--resume")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("input_baseline_mismatch", err)
+
+    def test_resume_refused_when_toolkit_code_changed(self):
+        """REAL negative: silently changing installed toolkit code while the
+        version label stays identical must invalidate the checkpoint (the
+        engine component of the fingerprint is a content hash, not a label)."""
+        self._pass_run()
+        probe = os.path.join(os.path.dirname(os.path.abspath(certpassly.__file__)),
+                             "phase1", "p1common.py")
+        original = open(probe, "rb").read()
+        version_before = certpassly.__version__
+        try:
+            with open(probe, "ab") as f:  # comment-only change: code still valid
+                f.write(b"\n# toolkit-drift probe (synthetic negative test)\n")
+            self.assertEqual(certpassly.__version__, version_before,
+                             "the version label must stay unchanged for this probe")
+            with mock.patch.object(run_all, "run_stage") as rs:
+                rc, err = self._refuse_capture("--resume")
+            self.assertEqual(rc, run_all.GUARD_EXIT)
+            rs.assert_not_called()
+            self.assertIn("toolkit_tree_sha256", err)
+        finally:
+            with open(probe, "wb") as f:
+                f.write(original)
+        self.assertEqual(open(probe, "rb").read(), original,
+                         "the probe must restore the toolkit file byte-exactly")
+        # restored toolkit: the same checkpoint resumes cleanly again
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc = self._run("--resume")
+        self.assertEqual(rc, 0)
+        rs.assert_not_called()
+
+    # ---- NEGATIVE: checkpoints that predate inventories -------------------
+
+    def test_resume_degrades_to_full_run_when_checkpoint_lacks_inventories(self):
+        """An old-format checkpoint (no per-stage inventories, no baseline)
+        cannot authorize skipping: --resume rebuilds EVERYTHING from stage 0
+        with a loud notice - never a green no-op."""
+        self._pass_run()
+        out = json.loads(open(self.ckpt).read())
+        for s in out.get("stages", []):
+            s.pop("outputs", None)
+        out.pop("input_baseline", None)
+        json.dump(out, open(self.ckpt, "w"))
+        # --start-from on the same stale receipt: refuse outright
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--start-from", "reconcile")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("predates output-inventory verification", err)
+        # --resume: explicit full rebuild, all stages re-run
+        ran = []
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with mock.patch.object(run_all, "run_stage",
+                                   side_effect=self._fake_stages(ran=ran)):
+                rc = self._run("--resume")
+        self.assertEqual(rc, 0)
+        self.assertEqual(ran, run_all.STAGES,
+                         "a checkpoint without inventories must skip nothing")
+        self.assertIn("cannot verify this checkpoint's artifacts", buf.getvalue())
+
+    # ---- dry-run visibility -------------------------------------------------
+
+    def test_dry_run_with_resume_reports_output_refusal(self):
+        """Even --dry-run must surface an output-inventory refusal."""
+        self._pass_run()
+        os.unlink(os.path.join(self.root, "structured/v1/questions/q001.json"))
+        with mock.patch.object(run_all, "run_stage") as rs:
+            rc, err = self._refuse_capture("--dry-run", "--resume")
+        self.assertEqual(rc, run_all.GUARD_EXIT)
+        rs.assert_not_called()
+        self.assertIn("output_inventory_mismatch", err)
+
+    # ---- positive control ---------------------------------------------------
+
+    def test_resume_noop_verifies_every_recorded_output(self):
+        """Positive control: with every recorded artifact intact, --resume is
+        a VERIFIED no-op (and the message says so)."""
+        self._pass_run()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with mock.patch.object(run_all, "run_stage") as rs:
+                rc = self._run("--resume")
+        self.assertEqual(rc, 0)
+        rs.assert_not_called()
+        self.assertIn("every recorded output verified", buf.getvalue())
 
 
 if __name__ == "__main__":
