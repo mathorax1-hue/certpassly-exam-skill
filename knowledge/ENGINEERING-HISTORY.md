@@ -96,6 +96,10 @@ Private proof: https://github.com/mathorax1-hue/raw-exam/actions/runs/4318432940
 
 **Byte-compatibility rule:** provenance label defaults keep the historical private-toolkit strings so a config from a previously accepted extraction reproduces its outputs byte-identically; new runs declare the public module and pinned commit via the optional config `provenance` block. Verified by replaying accepted pilot extractions with their original configs.
 
+**Incident during the first five-exam batch (version sensitivity):** PyMuPDF 1.28.2 (inside the original >=1.24,<2 range) produced a different text reading order on a /Rotate 90 multi-question page than the validated 1.26.7 line, assigning two spans of a later question to the previous question's segment. The builder's per-question page-set cross-check against the pinned extractor caught it and BLOCKED the whole run with an explicit assertion — the fail-closed design worked; no corrupt layer was emitted. Fix: pin the phase1 extra to the validated minor line (>=1.26,<1.27), document the reason in pyproject and DEPENDENCIES.md, and require a full adversarial + pilot replay before ever widening.
+
+**Schema fix from the same batch:** owner exam codes may contain underscores (e.g. FCP_FGT_AD-7.6); the structured/v1 template's exam_code pattern now allows them. Previously accepted extractions (codes without underscores) remain valid under the widened pattern; only the emitted extraction-schema.json pattern string differs on replay.
+
 **Rule:** the private repository must not keep a separately evolving copy of this generic code (see the private tool-promotion policy); only narrowly justified private adapters may remain. A green public CI run or a promoted tool does not verify answer truth, approve answers, or authorize publication.
 
 ## Sustainable incident-record format

@@ -41,7 +41,7 @@
    "required": ["schema_version", "exam_code", "question_id", "source_number", "marker", "pages", "stem", "options", "answer", "media_usages", "question_type", "provenance", "review"],
    "properties": {
     "schema_version": {"const": "structured-v1"},
-    "exam_code": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{1,20}$"},
+    "exam_code": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,20}$"},
     "question_id": {"type": "string", "pattern": "^q[0-9]{3,4}$"},
     "source_number": {"type": "integer", "minimum": 1},
     "marker": {"type": "string"},

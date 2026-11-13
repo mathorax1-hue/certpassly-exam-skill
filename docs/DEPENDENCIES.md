@@ -43,7 +43,7 @@ System tools: git for versioning and pinned checkouts; Poppler pdfinfo/pdftoppm 
 
 | Package | Allowed range | Why |
 | --- | --- | --- |
-| PyMuPDF | >=1.24,<2 | geometry/text/image pass (validated on 1.26.7) |
+| PyMuPDF | >=1.26,<1.27 | geometry/text/image pass; reading order on rotated pages is version-sensitive (1.28.2 diverged from the pinned extractor; the builder cross-check BLOCKS). Validated line: 1.26.x (1.26.7 proven on two accepted pilots). Do not widen without a full replay. |
 | Pillow | >=10,<13 | image decode, contact sheets |
 | numpy | >=1.26,<3 | pixel comparisons |
 | jsonschema | >=4.20,<5 | structured/v1 schema validation |

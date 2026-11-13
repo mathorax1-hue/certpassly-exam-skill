@@ -87,6 +87,19 @@ class TemplateSchemaTests(unittest.TestCase):
         self.assertIn("typed_text_with_answer_image",
                       cfg["schema"]["source_kind_extension"])
 
+    def test_exam_code_pattern_allows_underscores(self):
+        """Owner exam codes may contain underscores (e.g. vendor codes with
+        underscores); the schema must not reject them."""
+        import re
+        schema = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+        pattern = schema["definitions"]["question_record"]["properties"]["exam_code"]["pattern"]
+        rx = re.compile(pattern)
+        self.assertTrue(rx.match("FCP_FGT_AD-7.6"))
+        self.assertTrue(rx.match("AB-900"))
+        self.assertTrue(rx.match("AI-901"))
+        self.assertFalse(rx.match("_ leading underscore rejected"))
+        self.assertFalse(rx.match(""))
+
     def test_result_accumulator_fail_closed(self):
         r = P.Result()
         r.check("ok_check", True, "fine")
