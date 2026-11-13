@@ -12,20 +12,27 @@ question image that looks marked; it is deliberately conservative:
     learner output is a different, provably-unmarked source image or a
     re-render of vector/annotation-free PDF content.
 
-Shape model (why ordinary text does not trip it):
+Shape model (why ordinary UI borders and text do not trip it):
   pen_shape    hollow component whose dark pixels span >=80% of bbox rows AND
                columns (a drawn circle/ellipse/box/X has edges everywhere;
-               words have inter-letter gaps), >=24x16 px, >=0.08% of image
+               words have inter-letter gaps), >=24x16 px, >=0.08% of image,
+               AND whose stroke is PEN-LIKE in color: much darker than UI
+               chrome (min gray <= 60) or clearly colored (channel spread
+               >= 60, e.g. red/blue/green pen). Mid-gray UI borders
+               (~90-150 gray, low saturation) are excluded by this rule.
   solid_stroke near-solid elongated component (fill>=0.75, thickness>=4px,
-               length>=6% of a dimension, aspect>=3.5) - an underline or pen
-               line; word glyphs are sparse (fill~0.2-0.35) and 1-2px thin
-  filled_dot   compact near-solid near-square blob 8-28px (a pen dot);
-               letters have counters/holes (fill<0.85)
+               length>=6% of a dimension, aspect>=3.5) with pen-like color -
+               an underline or pen line; word glyphs are sparse (fill~0.2-0.35)
+               and 1-2px thin, gray dividers fail the color rule
+  filled_dot   compact near-solid near-square blob 8-28px with pen-like
+               color (a pen dot); letters have counters/holes (fill<0.85)
 
 Everything is computed on the alpha-flattened RGB image with OpenCV only.
 Known limitation (recorded honestly): heavy blur can fade pen marks below
 the dark threshold; the independent blur quality gate blocks such images
-anyway, and the operator runbook documents it.
+anyway, and the operator runbook documents it. Vector-drawn marks on a PDF
+page (not raster, not annotations) are OUT OF SCOPE for this detector and
+are recorded as a documented limitation of the vector render path.
 """
 from __future__ import annotations
 
@@ -75,7 +82,7 @@ def detect_marks(pil_rgb) -> dict:
 
     Returns a marking summary dict:
       {"detected_mark_boxes": int, "marks": [{x,y,w,h,kind} normalized],
-       "dark_fraction": float, "method": "opencv-connected-components-v2",
+       "dark_fraction": float, "method": "opencv-connected-components-v3",
        "note": "..."}
     Coordinates are normalized to [0,1].
     """
@@ -91,6 +98,15 @@ def detect_marks(pil_rgb) -> dict:
     dark = (gray < thresh).astype(np.uint8())
     dark_fraction = float(dark.mean())
 
+    # Pen-like color facts per component: darkest gray value and channel spread.
+    chan_spread = img.max(axis=2).astype(int) - img.min(axis=2).astype(int)
+
+    def pen_like(x, y, w, h, sub):
+        ys, xs = np.nonzero(sub)
+        gs = gray[y:y + h, x:x + w][ys, xs]
+        sp = chan_spread[y:y + h, x:x + w][ys, xs]
+        return bool(gs.min() <= 60 or sp.max() >= 60)
+
     min_area_rel = 0.0008
     min_area = min_area_rel * W * H
 
@@ -99,15 +115,25 @@ def detect_marks(pil_rgb) -> dict:
         area = float(sub.sum())
         if area < min_area and not (w >= 24 and h >= 16 and area >= 0.5 * min_area):
             continue
+        if not pen_like(x, y, w, h, sub):
+            continue  # mid-gray low-saturation UI chrome, not a pen stroke
         fill = area / float(w * h)
         rows, cols = _coverage(sub)
         hollow = _hollow_core_fraction(sub)
         aspect = w / float(h) if h else 0.0
         rel_w, rel_h = w / float(W), h / float(H)
         kind = None
-        # (a) hollow spanning shape: circle / ellipse / box / X drawn on top
+        thickness = area / float(max(w, h)) if max(w, h) else 0.0
+        # (a) hollow spanning shape: circle / ellipse / box drawn on top
         if (hollow >= 0.50 and rows >= 0.80 and cols >= 0.80
                 and w >= 24 and h >= 16 and 0.25 <= aspect <= 20.0
+                and (rel_w >= 0.01 or rel_h >= 0.01)):
+            kind = "pen_shape"
+        # (a2) thin spanning shape: X marks / crossed strokes fill their core
+        # (not hollow) but still span the whole bbox with thin strokes; text
+        # words fail the column-coverage rule (inter-letter gaps)
+        elif (rows >= 0.85 and cols >= 0.85 and 0.03 <= fill <= 0.5
+                and w >= 24 and h >= 16 and thickness <= 18.0
                 and (rel_w >= 0.01 or rel_h >= 0.01)):
             kind = "pen_shape"
         # (b) solid elongated stroke: underline / pen line
@@ -129,8 +155,9 @@ def detect_marks(pil_rgb) -> dict:
         "detected_mark_boxes": len(marks),
         "marks": marks,
         "dark_fraction": round(dark_fraction, 6),
-        "method": "opencv-connected-components-v2",
-        "note": ("advisory machine detection of pen-like selection marks; "
+        "method": "opencv-connected-components-v3",
+        "note": ("advisory machine detection of pen-like selection marks "
+                 "(dark or colored hollow shapes, solid strokes, pen dots); "
                  "never used to erase or reconstruct content; a detection "
                  "refuses learner eligibility, it does not clean anything; "
                  "heavy blur can fade marks below the dark threshold - the "

@@ -48,7 +48,9 @@
           "question_id": { "type": "string" },
           "clean_candidate": {
             "type": ["object", "null"],
-            "required": ["sha256", "bytes", "method"],
+            "required": ["method"],
+            "if": { "required": ["file"] },
+            "then": { "required": ["file", "sha256", "bytes"] },
             "properties": {
               "file": { "type": "string" },
               "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },

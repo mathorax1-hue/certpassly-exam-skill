@@ -57,6 +57,19 @@ sequence, caching, troubleshooting and the honest scope statement.
 | python -m certpassly.phase1.adversarial --base SCRATCH --upstream PINNED/scripts | 37 synthetic adversarial scenarios (real pinned extractor + real builder) | Scratch + optional report |
 
 
+## Non-AI clean simulator images (certpassly.media_prep)
+
+Deterministic clean-image selection, high-resolution rendering, quality gates and the hard answer-image privacy gate on top of the PINNED upstream extraction (read-only checkout; never vendored, never reimplemented). Strictly local, no AI, no inpainting, no upscaling-as-restoration. Install with `python -m pip install -e ".[phase1,visual]"`. Full design, role definitions and the A/B/C/D priority contract: [NONAI-SIMULATOR-IMAGES.md](NONAI-SIMULATOR-IMAGES.md); test matrix: [NONAI-IMAGE-TEST-PLAN.md](NONAI-IMAGE-TEST-PLAN.md); install/commands/troubleshooting: [NONAI-IMAGE-OPERATOR-RUNBOOK.md](NONAI-IMAGE-OPERATOR-RUNBOOK.md).
+
+| Command | Use | Writes? |
+|---|---|---|
+| python -m certpassly.media_prep doctor --json | Module/system-tool/pin inventory | No |
+| python -m certpassly.media_prep scan --config PRIVATE/media-prep-config.json [--output F --explain] | Read-only source-image role inventory + per-question readiness; exit 2 = blocked questions (honest, listed) | Optional local JSON |
+| python -m certpassly.media_prep prepare --config PRIVATE/media-prep-config.json [--dry-run --explain] | Write ONLY verified clean candidates + isolated reviewer-only copies + tamper-evident manifest; byte-identical on rerun | prepared/clean, prepared/private/reviewer-only, manifest, inventory |
+| python -m certpassly.media_prep verify-package --config PRIVATE/media-prep-config.json --package DRAFT.zip | Explicit-allowlist privacy gate: reviewer-only SHA, unallowlisted members, traversal/symlink/nested-zip/external-URL/duplicate/publish-flag refusals, manifest tamper; exit 3 = refused | Optional report JSON |
+
+Registry entries: `media_prep_source_scan`, `media_prep_selection_prepare`, `media_prep_privacy_gate`, `media_prep_doctor`. Schemas: `image-readiness-v1`, `image-manifest-v1`, `media-prep-v1` (JSON Schema, package-data).
+
 ## Official source capture (real output remains private)
 
     python scripts/capture_official_source.py \

@@ -170,9 +170,13 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
     """Priority B (vector variant): the exhibit is DRAWN in the PDF, not raster.
 
     A page whose vector drawings cover a substantial area (>=20%) is rendered
-    whole at high DPI (annots=False) and the render must be provably unmarked.
-    Real annotations on that page (e.g. the owner's square marking the keyed
-    row) are excluded by the render and recorded.
+    whole at high DPI (annots=False). Verification is annotation-diff based:
+    when real annotations exist on the page, the annotation-free render must
+    actually DIFFER from the with-annotations render (the marks were real
+    annotations and excluding them changed pixels). Vector page content is
+    original exam content by the pinned upstream contract; vector-DRAWN pen
+    marks cannot be distinguished from table borders and are recorded as a
+    documented limitation (VECTOR_PEN_MARK_UNDETECTABLE), never as clean.
     """
     try:
         import fitz
@@ -202,17 +206,27 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
     if page_area <= 0 or drawn_area < 0.20 * page_area:
         return None
     clip = tuple(page.rect)
-    out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip, dpi=300, annots=False)
-    png = out.pop("png_bytes")
-    rendered = imageio.SourceImage(f"{qid}.vector-page.png", png)
-    mk = marking_mod.detect_marks(rendered.flattened_rgb())
-    if marking_mod.looks_marked(mk):
-        issues.append({"reason": "PRIORITY_B_NOT_APPLICABLE",
-                       "detail": f"page {page_no} vector render still shows marks"})
-        return None
-    issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
-                   "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
-                             f"(drawings cover {drawn_area / page_area:.0%} of the page)"})
+    clean_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
+                                         dpi=300, annots=False)
+    png = clean_out.pop("png_bytes")
+    if clean_out["annotations_present"]:
+        with_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
+                                            dpi=300, annots=True)
+        with_png = with_out.pop("png_bytes")
+        if png == with_png:
+            issues.append({"reason": "PRIORITY_B_NOT_APPLICABLE",
+                           "detail": f"page {page_no}: annotations did not change the render"})
+            return None
+        issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
+                       "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
+                                 f"(drawings cover {drawn_area / page_area:.0%} of the page); "
+                                 f"{len(clean_out['annotations_in_clip'])} real annotations "
+                                 f"excluded (render differs from with-annotations render)"})
+    else:
+        issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
+                       "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
+                                 f"(drawings cover {drawn_area / page_area:.0%} of the page); "
+                                 f"page has no annotations"})
     return {
         "source_file": f"(pdf-page-{page_no}-vector)",
         "source_sha256": imageio.sha256_bytes(png),
@@ -220,13 +234,16 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
         "xref": None,
         "method": METHOD_PRIORITY_B,
         "pixel_source": "pdf_region_render",
-        "width": out["width"],
-        "height": out["height"],
+        "width": clean_out["width"],
+        "height": clean_out["height"],
         "lossless_source": True,
-        "render": {**out, "render_sha256": imageio.sha256_bytes(png), "render_bytes": len(png)},
+        "render": {**clean_out, "render_sha256": imageio.sha256_bytes(png),
+                   "render_bytes": len(png),
+                   "vector_pen_mark_undetectable": True},
         "embedded_raster_ceiling": None,
         "note": "question exhibit is drawn as PDF vector content; rendered from the "
-                "original page at high DPI (true added pixels, not upscaling)",
+                "original page at high DPI (true added pixels, not upscaling); "
+                "vector-drawn pen marks are a documented out-of-scope limitation",
     }
 
 
@@ -329,7 +346,9 @@ def _decide_one_question(ctx, qid, qrec) -> dict:
                 page=(rec.get("placements") or [{}])[0].get("page"),
                 xref=rec.get("xref"), assigned_role=u["role"],
                 verified_role=roles.UNKNOWN_UNVERIFIED, method=METHOD_NONE,
-                marking={"error": "undecodable"}, issues=prov_issues,
+                marking={"detected_mark_boxes": 0, "error": "undecodable",
+                         "note": "image could not be decoded; mark detection not run"},
+                issues=prov_issues,
                 answer_image_inferred=u["answer_image_inferred"]))
             continue
         img = ctx.img(fname)

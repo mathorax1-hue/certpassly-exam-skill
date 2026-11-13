@@ -48,8 +48,12 @@ IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"RIFF", b"BM", b"II*\x00",
 NESTED_ZIPS = (".zip",)
 
 _URL_RX = re.compile(r"""(?:https?://|data:|//)[^\s"'<>)]+""", re.I)
+# Image references in learner-visible text: quoted paths (JSON/HTML/JS) AND
+# bare tokens (CSV fields like "qv-001,clean/q002.png,exhibit").
 _LOCAL_REF_RX = re.compile(
-    r"""["'(]([^"')]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|ico))["')]""", re.I)
+    r"""["'(]([^"')]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|ico))["')]"""
+    r"""|(?:^|[\s,;:])([\w.\/ -]+?\.(?:png|jpe?g|gif|webp|bmp|tiff?|ico))(?=$|[\s,;"'])""",
+    re.I | re.M)
 
 
 def _is_image_name(name: str) -> bool:
@@ -122,7 +126,6 @@ def verify_package(manifest_path: str, package_path: str, *, allow_external_urls
     problems = []
     flags = []
     seen_basenames = {}
-    seen_shas = {}
     image_members = 0
     text_members = 0
 
@@ -152,14 +155,14 @@ def verify_package(manifest_path: str, package_path: str, *, allow_external_urls
                 if base in seen_basenames and seen_basenames[base] != raw_name:
                     problems.append({"member": raw_name, "reason": "DUPLICATE_ASSET_IDENTITY",
                                      "detail": f"also present as {seen_basenames[base]}"})
-                if sha in seen_shas and seen_shas[sha] != raw_name:
-                    problems.append({"member": raw_name, "reason": "DUPLICATE_ASSET_SHA",
-                                     "detail": f"same bytes also at {seen_shas[sha]}"})
+                # NOTE: the same bytes under two DIFFERENT allowlisted names is
+                # legitimate asset deduplication (one exhibit reused by several
+                # questions); only unallowlisted or reviewer-only duplicates are
+                # refused (UNALLOWED_IMAGE_MEMBER / REVIEWER_ONLY_BINARY_IN_PACKAGE).
             else:
                 problems.append({"member": raw_name, "reason": "UNALLOWED_IMAGE_MEMBER",
                                  "detail": "not on the verified clean-candidate allowlist"})
             seen_basenames.setdefault(base, raw_name)
-            seen_shas.setdefault(sha, raw_name)
             return
         # nested archives
         if n.endswith(NESTED_ZIPS):
@@ -184,10 +187,10 @@ def verify_package(manifest_path: str, package_path: str, *, allow_external_urls
                     problems.append({"member": raw_name, "reason": "EXTERNAL_URL_NOT_ALLOWED_HOST",
                                      "detail": url[:120]})
         for m in _LOCAL_REF_RX.finditer(text):
-            ref = m.group(1).replace("\\", "/").rsplit("/", 1)[-1].lower()
-            if ref not in allow:
+            ref = (m.group(1) or m.group(2) or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if ref and ref not in allow:
                 problems.append({"member": raw_name, "reason": "IMAGE_REF_NOT_ALLOWLISTED",
-                                 "detail": m.group(1)[:160]})
+                                 "detail": (m.group(1) or m.group(2))[:160]})
         for kw in SCORING_KEY_FIELDS:
             if re.search(rf'["\']{re.escape(kw)}["\']\s*:', text):
                 flags.append({"member": raw_name, "flag": SCORING_FLAG,
