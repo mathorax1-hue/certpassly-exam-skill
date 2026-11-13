@@ -35,16 +35,28 @@ class ReconcileTests(unittest.TestCase):
         failed = [c for c in out["checks"] if not c["passed"]]
         self.assertEqual(failed, [])
         # measured summary matches the synthetic fixture
-        self.assertEqual(out["summary"]["questions"], 3)
+        self.assertEqual(out["summary"]["questions"], 4)
         self.assertEqual(out["summary"]["image_usages"], 4)
         self.assertEqual(out["summary"]["unique_binaries"], 3)
         self.assertEqual(out["summary"]["answer_accounting"],
                          {"owner_typed_text": 1, "typed_text_with_answer_image": 1,
-                          "answer_reference_image": 1})
+                          "answer_reference_image": 1, "missing": 1})
         # answer accounting check name embeds MEASURED values, never hardcodes
         names = [c["check"] for c in out["checks"]]
-        self.assertTrue(any(n.startswith("answer_accounting_1_typed_1_image_1_both_3_total")
+        self.assertTrue(any(n == "answer_accounting_1_typed_1_image_1_both_1_missing_4_total"
                             for n in names), names)
+
+    def test_missing_answer_source_kind_accounted(self):
+        """A question whose source genuinely has no answer must reconcile as
+        missing (fail-closed), never break the accounting check."""
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 0)
+        out = self._read()
+        names = [c["check"] for c in out["checks"]]
+        self.assertIn("answer_accounting_1_typed_1_image_1_both_1_missing_4_total", names)
+        sai_mismatch = [c for c in out["checks"]
+                        if c["check"] == "source_answer_index_matches_original_split"]
+        self.assertTrue(sai_mismatch and sai_mismatch[0]["passed"])
 
     def test_wrong_expected_count_fails_closed(self):
         cfg = P.load_config(self.cfg_path)

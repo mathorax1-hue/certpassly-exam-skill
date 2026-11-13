@@ -47,7 +47,7 @@ class ExportTests(unittest.TestCase):
         rt = json.loads(Path(f"{v1}/export/upstream-extract-compatible/roundtrip-check.json").read_text())
         self.assertEqual(rt["result"], "IDENTICAL")
         self.assertEqual(rt["field_mismatches"], 0)
-        self.assertEqual(rt["questions_compared"], 3)
+        self.assertEqual(rt["questions_compared"], 4)
 
     def test_double_run_determinism(self):
         rc1, snap1 = _run_and_snapshot(self.cfg_path, self.root)
@@ -70,13 +70,15 @@ class ExportTests(unittest.TestCase):
             self.assertNotIn("options", q)
             self.assertNotIn("answer", q)
         blockers = json.loads(Path(f"{v1}/export/site-format-v1-draft/export-blockers.json").read_text())
-        self.assertEqual(blockers["blocked_questions"], 3)
+        self.assertEqual(blockers["blocked_questions"], 4)
         by_q = {b["question"]: b["cannot_export_without_review"] for b in blockers["items"]}
         # q002: image-only answer -> answer gate; q003: typed+image -> answer gate;
-        # q002 also in_question_image -> options gate
+        # q002 also in_question_image -> options gate; q004: missing answer + unknown type
         self.assertTrue(any("cannot_export_answer_without_review" in r for r in by_q["q002"]))
         self.assertTrue(any("cannot_export_options" in r for r in by_q["q002"]))
         self.assertTrue(any("cannot_export_answer_without_review" in r for r in by_q["q003"]))
+        self.assertTrue(any("cannot_export_key" in r for r in by_q["q004"]))
+        self.assertTrue(any("cannot_export_type" in r for r in by_q["q004"]))
 
     def test_split_original_is_exact_copy(self):
         _run_and_snapshot(self.cfg_path, self.root)

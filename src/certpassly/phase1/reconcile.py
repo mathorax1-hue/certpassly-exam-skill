@@ -156,30 +156,37 @@ def main(cfg_path):
                 f"image_questions={sup_qs} text_questions={text_only_replacements}")
     R.check(f"original_split_preserves_all_{n_q}_with_pdf_pages",
             all(r["pages"] for r in orig_split.values()) and
-            all((r["question_images"] or r["answer_images"] or r["options"] or r["answer_raw"])
+            all((r["question_images"] or r["answer_images"] or r["options"] or r["answer_raw"]
+                 or r["stem"])
                 for r in orig_split.values()))
 
-    # 6. answer accounting (universal; handles the typed+image extension kind)
+    # 6. answer accounting (universal; handles the typed+image extension kind
+    #    AND questions whose source genuinely has no answer, fail-closed as
+    #    answer.source_kind=missing + an answer_missing_in_source unresolved item)
     typed = {q for q, r in orig_split.items() if r["answer_raw"].strip()}
     imgkeyed = {q for q, r in orig_split.items() if r["answer_images"]}
     both = typed & imgkeyed
     t_only, i_only = typed - both, imgkeyed - both
+    neither = set(orig_split) - typed - imgkeyed
     sai = P.jload(f"{V1}/source-answer-index.json")
     kind_c = {k: sum(1 for v in sai["questions"].values() if v["source_kind"] == k) for k in KIND_ORDER}
+    name = f"answer_accounting_{len(t_only)}_typed_{len(i_only)}_image_"
     if both:
-        name = (f"answer_accounting_{len(t_only)}_typed_{len(i_only)}_image_"
-                f"{len(both)}_both_{n_q}_total")
-    else:
-        name = f"answer_accounting_{len(typed)}_typed_{len(imgkeyed)}_image_{n_q}_total"
+        name += f"{len(both)}_both_"
+    if neither:
+        name += f"{len(neither)}_missing_"
+    name += f"{n_q}_total"
     R.check(name,
-            len(t_only | i_only | both) == n_q and kind_c.get("owner_typed_text") == len(t_only)
+            len(t_only | i_only | both | neither) == n_q
+            and kind_c.get("owner_typed_text") == len(t_only)
             and kind_c.get("answer_reference_image") == len(i_only)
             and kind_c.get("typed_text_with_answer_image", 0) == len(both)
-            and kind_c.get("missing", 0) == n_q - len(typed | imgkeyed))
+            and kind_c.get("missing", 0) == len(neither))
     R.check("source_answer_index_matches_original_split",
             {q for q, v in sai["questions"].items() if v["source_kind"] == "owner_typed_text"} == t_only
             and {q for q, v in sai["questions"].items() if v["source_kind"] == "answer_reference_image"} == i_only
-            and {q for q, v in sai["questions"].items() if v["source_kind"] == "typed_text_with_answer_image"} == both)
+            and {q for q, v in sai["questions"].items() if v["source_kind"] == "typed_text_with_answer_image"} == both
+            and {q for q, v in sai["questions"].items() if v["source_kind"] == "missing"} == neither)
 
     # 7. full text coverage (universal)
     total_runs = 0

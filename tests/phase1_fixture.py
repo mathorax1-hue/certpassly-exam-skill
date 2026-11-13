@@ -86,8 +86,12 @@ def build_fixture(root: str) -> dict:
                            "pdftohtml_name": "p-002_002.png", "question_key": "q003",
                            "page": 1, "active_packaged_media_status": "active"}],
             site_type="multiple_select", marker="QUESTION 3", upstream_pages=[1])
+    q4 = _q(4, source_kind="missing", answer_raw="",
+            options_mode="none", entries=[],
+            media_usages=[],
+            site_type="unknown", marker="QUESTION 4", upstream_pages=[1])
 
-    for name, rec in (("q001", q1), ("q002", q2), ("q003", q3)):
+    for name, rec in (("q001", q1), ("q002", q2), ("q003", q3), ("q004", q4)):
         with open(os.path.join(v1, "questions", f"{name}.json"), "w", encoding="utf-8") as f:
             json.dump(rec, f, indent=1)
 
@@ -99,7 +103,8 @@ def build_fixture(root: str) -> dict:
         json.dump({"schema_version": "structured-v1",
                    "questions": {"q001": {"source_kind": "owner_typed_text"},
                                  "q002": {"source_kind": "answer_reference_image"},
-                                 "q003": {"source_kind": "typed_text_with_answer_image"}}}, f, indent=1)
+                                 "q003": {"source_kind": "typed_text_with_answer_image"},
+                                 "q004": {"source_kind": "missing"}}}, f, indent=1)
 
     with open(os.path.join(v1, "source-manifest.json"), "w", encoding="utf-8") as f:
         json.dump({"schema_version": "structured-v1", "exam_code": "SYN-001",
@@ -114,6 +119,8 @@ def build_fixture(root: str) -> dict:
             {"classification": "question_content", "text": "Synthetic stem 2"},
             {"classification": "question_content", "text": "QUESTION 3"},
             {"classification": "question_content", "text": "Synthetic stem 3"},
+            {"classification": "question_content", "text": "QUESTION 4"},
+            {"classification": "question_content", "text": "Synthetic stem 4"},
         ]}, f, indent=1)
 
     # pinned-upstream split format (what extract_owner_pdf.py would emit)
@@ -128,7 +135,7 @@ def build_fixture(root: str) -> dict:
                 "answer_images": [u["pdftohtml_name"] for u in q["media_usages"]
                                   if u["role"] == "answer_reference"],
                 "layout_profile": q["layout_profile"]}
-    split = {k: split_rec(q, k) for k, q in (("q001", q1), ("q002", q2), ("q003", q3))}
+    split = {k: split_rec(q, k) for k, q in (("q001", q1), ("q002", q2), ("q003", q3), ("q004", q4))}
     with open(os.path.join(up, "extracted", "split.json"), "w", encoding="utf-8") as f:
         json.dump(split, f, indent=1, sort_keys=True)
 
@@ -151,13 +158,13 @@ def build_fixture(root: str) -> dict:
         "schema": {"title": "synthetic", "description": "synthetic",
                    "source_kind_extension": ["typed_text_with_answer_image"]},
         "expected": {
-            "pages": 1, "questions": 3, "assets": 3, "usages": 4,
+            "pages": 1, "questions": 4, "assets": 3, "usages": 4,
             "roles": {"question_prompt": 2, "exhibit": 0, "answer_reference": 2,
                       "cover_decoration": 0},
             "answer_kinds": {"owner_typed_text": 1, "typed_text_with_answer_image": 1,
-                             "answer_reference_image": 1},
-            "unknown_types": 0,
-            "cover_marketing_runs": 0, "question_content_runs": 6,
+                             "answer_reference_image": 1, "missing": 1},
+            "unknown_types": 1,
+            "cover_marketing_runs": 0, "question_content_runs": 8,
             "unresolved_min": 0,
         },
         "report_notes": {"known_limitations": ["synthetic fixture"],
