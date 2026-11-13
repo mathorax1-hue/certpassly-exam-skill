@@ -24,7 +24,9 @@ from __future__ import annotations
 import argparse, hashlib, json, re, sys
 from collections import Counter
 
-import fitz
+# NOTE: PyMuPDF (fitz) is imported lazily inside run_audit() so this module
+# stays importable on stdlib-only environments (public CI runner); the
+# command surfaces a clear error when the pdf extra is missing.
 
 
 def sha256_file(p):
@@ -37,6 +39,12 @@ def sha256_file(p):
 
 def run_audit(argv=None):
     """CLI entry: accepts an argv list (module mode passes sys.argv[1:])."""
+    try:
+        import fitz  # lazy: requires the pdf extra (PyMuPDF)
+    except ImportError as exc:
+        print(f"ERROR: certpassly.phase1.audit_source requires the pdf extra "
+              f"(PyMuPDF): {exc}", file=sys.stderr)
+        return 3
     ap = argparse.ArgumentParser(prog="certpassly.phase1.audit_source")
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--expected-sha256")
