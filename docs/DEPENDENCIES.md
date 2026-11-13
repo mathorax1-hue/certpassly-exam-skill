@@ -35,8 +35,29 @@ The syntax above works in a Unix shell. In PowerShell, assign PYTHONPATH with: $
 | browser | Playwright for page rendering | python -m pip install -e ".[browser]" | Optional; browser install may be required |
 | mcp | Read-only MCP diagnostic server | python -m pip install -e ".[mcp]" | Optional; no automatic ChatGPT connector |
 | dev | pytest and Ruff | python -m pip install -e ".[dev]" | Optional; unittest needs no third party package |
+| phase1 | Phase 1 PDF extraction toolkit (PyMuPDF, Pillow, numpy, jsonschema) | python -m pip install -e ".[phase1]" | Optional; strictly local, no release authority |
 
 System tools: git for versioning and pinned checkouts; Poppler pdfinfo/pdftoppm for PDF stages; gh optionally for authorized bounded dispatch; Docker and uv are optional. Use certpassly doctor to determine availability.
+
+## Phase 1 extraction toolkit dependencies (pinned ranges)
+
+| Package | Allowed range | Why |
+| --- | --- | --- |
+| PyMuPDF | >=1.26,<1.27 | geometry/text/image pass; reading order on rotated pages is version-sensitive (1.28.2 diverged from the pinned extractor; the builder cross-check BLOCKS). Validated line: 1.26.x (1.26.7 proven on two accepted pilots). Do not widen without a full replay. |
+| Pillow | >=10,<13 | image decode, contact sheets |
+| numpy | >=1.26,<3 | pixel comparisons |
+| jsonschema | >=4.20,<5 | structured/v1 schema validation |
+
+System prerequisites (not pip): Poppler `pdftohtml` (engine used by the pinned
+external upstream extractor) and Tesseract (visual drafts). Git LFS only for
+private repositories that store source PDFs in LFS. The upstream checkout stays
+pinned at `13dea6bab662ab1c4bbf87017e912e519907c8bc` via
+`scripts/bootstrap_upstream.sh`; it is an external read-only dependency and is
+never vendored (its root has no confirmed redistributable LICENSE). Update
+policy: dependency-range changes require a reviewed PR, registry/doc updates
+and a full synthetic test run; never `pip install -U` unpinned in a working
+environment. Install once per commit and reuse the venv/pip cache; see
+[PHASE1-EXTRACTION.md](PHASE1-EXTRACTION.md#installation-once-per-commit-caching-and-reuse).
 
 ## Persistent developer environments and reusable installation (owner directive, 2026-11-12)
 

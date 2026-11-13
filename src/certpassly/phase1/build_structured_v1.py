@@ -1,0 +1,940 @@
+#!/usr/bin/env python3
+"""Phase 1 extraction: build the structured/v1 extraction layer for one exam (public toolkit).
+
+Usage: python -m certpassly.phase1.build_structured_v1 <config.json>
+
+Generalized, fully config-driven engine (successor of the ZAI-EXTRACT-001 pilot
+builder):
+  - every path, count expectation, layout rule, note and prior-evidence input comes
+    from the config JSON (see docs/PHASE1-EXTRACTION.md); NO exam code, count or
+    page count is hardcoded here;
+  - runs the same algorithms so a config carrying an accepted pilot's values
+    reproduces its previously reviewed candidate byte-identically (verified on
+    two independent pilots);
+  - new genuine patterns are handled as versioned compatible extensions:
+    * answer source_kind "typed_text_with_answer_image" (typed key + answer
+      reference screenshot in the same source question);
+    * VCE-template placeholder options ("See Explanation section for answer.")
+      classify the question as visual (choices live in the question image);
+  - unextractable/corrupt image streams fail LOUDLY with a BLOCKED reason
+    instead of crashing or silently skipping.
+
+Reads (read-only): the actual owner PDF (SHA-256 verified first), the reproduced
+pinned-upstream extraction output, and optional prior private evidence declared
+in config. Writes the structured/v1 tree only; never modifies the PDF, research
+archive, authoring or evidence files.
+"""
+from __future__ import annotations
+import json, os, re, sys
+from collections import Counter, OrderedDict
+
+from . import p1common as P
+
+# NOTE: PyMuPDF (fitz) is imported lazily inside main() so the pure functions
+# (build_schema, build_readme) stay importable and unit-testable on stdlib-only
+# environments such as the public CI runner.
+
+SCHEMA_VERSION = "structured-v1"
+EXTRACTED_BY = "PyMuPDF geometry/text pass + pinned upstream extract_owner_pdf.py split replay"
+ANSWER_KIND_TYPED = "owner_typed_text"
+ANSWER_KIND_IMAGE = "answer_reference_image"
+ANSWER_KIND_BOTH = "typed_text_with_answer_image"
+ANSWER_KIND_MISSING = "missing"
+
+# P1-5 (director audit 2026-11-13): provenance marker used by prior manual
+# transcription drafts that are CertPassly-team EDITORIAL content, NOT owner
+# PDF transcriptions. Such drafts are never allowed into
+# answer.selection_candidates_unapproved; they live in the separate
+# answer.editorial_overlay_candidates field with this explicit provenance.
+EDITORIAL_PROVENANCE = "original_certpassly_team_editorial_not_owner_pdf"
+
+
+def build_schema(cfg):
+    """Emit the structured/v1 JSON schema.
+
+    Base: the versioned template (byte-identical to the accepted AB-900 PR #16
+    schema, formatting included). Config may override title/description and add
+    versioned compatible source_kind extensions; when the resulting object is
+    unchanged the template bytes are copied verbatim (byte-identity guarantee),
+    otherwise the modified object is re-serialized (new exams have no byte-
+    identity constraint, only structural correctness).
+    """
+    tpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "templates", "extraction-schema.v1.json")
+    with open(tpl_path, encoding='utf-8') as f:
+        tpl_text = f.read()
+    schema = json.loads(tpl_text)
+    sc = cfg.get("schema", {})
+    ext = sc.get("source_kind_extension", [])
+    changed = False
+    if sc.get("title") and sc["title"] != schema["title"]:
+        schema["title"] = sc["title"]; changed = True
+    if sc.get("description") and sc["description"] != schema["description"]:
+        schema["description"] = sc["description"]; changed = True
+    if ext:
+        enum = schema["definitions"]["question_record"]["properties"]["answer"]["properties"]["source_kind"]["enum"]
+        for k in ext:
+            if k not in enum:
+                enum.insert(enum.index(ANSWER_KIND_MISSING), k)
+        schema["definitions"]["question_record"]["properties"]["answer"]["properties"]["source_kind_extension_note"] = {"type": "string"}
+        schema["compatible_extensions"] = [
+            "structured/v1 compatible extension (version-controlled): answer.source_kind adds "
+            + ", ".join(ext) + " for source questions carrying BOTH a typed key and an "
+            "answer-reference screenshot. Fail-closed: answer privacy is private_reviewer_only "
+            "whenever answer-reference images are part of the answer."]
+        changed = True
+    if not changed:
+        return tpl_text, None
+    return json.dumps(schema, indent=1, ensure_ascii=False), schema
+
+
+def build_readme(cfg, stats, pdf_meta):
+    exam = cfg["exam_code"]
+    gb = cfg.get("generated_by", {})
+    toolkit_label = P.provenance(cfg, "toolkit_label", P.LEGACY_TOOLKIT_LABEL)
+    commands_ref = P.provenance(cfg, "commands_reference", P.LEGACY_COMMANDS_REFERENCE)
+    lines = [
+        f"# {exam} structured/v1 - private source-grounded extraction layer",
+        "",
+        f"Generated by {toolkit_label} "
+        f"from the immutable owner source PDF. Every record below is PRIVATE.",
+        "",
+        "## What this layer is",
+        "",
+        f"- Source-capture of the original owner questions/options/answers from "
+        f"`exams/{exam}/source/` (Git LFS, SHA-256 verified: `{stats['pdf']['sha256']}`, "
+        f"{stats['pdf']['bytes']:,} bytes, {stats['pdf']['page_count']} pages).",
+        f"- {stats['questions']} question records (`questions/qXXX.json`), one page record per PDF page "
+        f"(`pages/`), {stats['assets']} exact source image binaries (`assets/`, SHA-256 file names), "
+        f"{stats['usages']} image usages with roles and privacy flags.",
+        "- Answer-reference images are `private_reviewer_only` and are absent from every "
+        "learner-facing export; the site-format draft export is fail-closed and fully blocked "
+        "pending independent review.",
+        "- `unresolved.json` lists every ambiguity fail-closed; nothing is silently dropped or guessed.",
+        "",
+        "## What this layer is NOT",
+        "",
+        "- NOT verified answers: 0 keys are independently verified or human-approved.",
+        "- NOT a publication gate: no merge, no export, no site import has occurred.",
+        "- NOT editorial content: no question text was corrected or rewritten.",
+        "",
+        "## Regeneration",
+        "",
+        "Deterministic: re-running the toolkit with the same config, pinned upstream commit and "
+        "source PDF reproduces this tree byte-identically (data files). See "
+        f"{commands_ref} for the exact commands.",
+        "",
+        f"Generated by: {gb.get('worker', 'Z.ai')} | {gb.get('date', '')} | "
+        f"{gb.get('environment', 'local sandbox')}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def main(cfg_path):
+    import fitz  # lazy: heavy third-party dependency, only needed for a real run
+    cfg = P.load_config(cfg_path)
+    exam = cfg["exam_code"]
+    paths = cfg["paths"]
+    pdf_path, out_dir = paths["pdf"], paths["out_dir"]
+    up_out = paths["upstream_out"]
+    repo = paths["repo"]
+    ns = P.compile_layout(cfg)
+    lay = cfg.get("layout", {})
+    ev = cfg.get("evidence", {}) or {}
+
+    # ---------- 0. verify source integrity ----------
+    pdf_sha = P.sha256_file(pdf_path)
+    pdf_bytes = os.path.getsize(pdf_path)
+    exp = cfg.get("source", {})
+    if exp.get("expected_pdf_sha256") and pdf_sha != exp["expected_pdf_sha256"]:
+        print(f"FATAL: source PDF sha256 {pdf_sha} != expected {exp['expected_pdf_sha256']}")
+        return 1
+    if exp.get("expected_bytes") and pdf_bytes != exp["expected_bytes"]:
+        print(f"FATAL: source PDF bytes {pdf_bytes} != expected {exp['expected_bytes']}")
+        return 1
+
+    doc = fitz.open(pdf_path)
+    if doc.is_encrypted or doc.needs_pass:
+        print("FATAL: source PDF is encrypted/password-protected; refusing to fabricate extraction "
+              "(report BLOCKED_SOURCE_ENCRYPTED)")
+        return 2
+    meta = doc.metadata
+
+    # ---------- 1. pinned-upstream reproduced outputs ----------
+    split = P.jload(f"{up_out}/extracted/split.json")
+    layout = P.jload(f"{up_out}/extracted/layout.json")
+    cleanups = P.jload(f"{up_out}/extracted/cleanups.json")
+    unparsed = P.jload(f"{up_out}/extracted/unparsed.json")
+    visual_draft = P.jload(f"{up_out}/extracted/visual_draft.json", {})
+    split_sha = P.sha256_file(f"{up_out}/extracted/split.json")
+
+    # ---------- 2. optional prior private reference evidence ----------
+    def ev_load(key, default):
+        rel = ev.get(key)
+        return P.jload(P.repo_path(cfg, rel), default) if rel else default
+
+    vra = ev_load("visual_role_audit", {"image_roles": [], "verified_total_page_count": None})
+    recon = ev_load("active_visual_role_reconciliation",
+                    {"active_source_roles": [], "superseded_source_roles": []})
+    vt = ev_load("visual_transcription", {})
+    vsd = ev_load("visual_source_selection_drafts", {})
+    ledger = ev_load("question_review_ledger", {"entries": []})
+    archived_media_dir = P.repo_path(cfg, ev["archived_media_dir"]) if ev.get("archived_media_dir") else None
+    replacements_live = ev_load("original_editorial_replacements", {"replacement_questions": []})
+
+    replaced_by = {}
+    for r in replacements_live.get("replacement_questions", []):
+        replaced_by[r["original_owner_question_id"]] = r.get("new_question_key") or r.get("editorial_question_id")
+
+    # ---------- 3. page-level geometry pass (PyMuPDF, independent of upstream) ----------
+    pages_data = []
+    all_spans = []
+    hidden_text_report = []
+    for pno in range(doc.page_count):
+        page = doc[pno]
+        m = page.rotation_matrix
+        try:
+            for sp in page.get_texttrace():
+                if sp.get("type") == 3:
+                    chars = "".join(chr(c[0]) for c in sp.get("chars", []))
+                    if chars.strip():
+                        r = fitz.Rect(sp["bbox"]) * m
+                        hidden_text_report.append(dict(page=pno + 1, bbox=[round(v, 2) for v in r],
+                                                       text=chars[:200]))
+        except Exception:
+            pass
+        d = page.get_text("dict", sort=True)
+        page_spans = []
+        for b in d["blocks"]:
+            if b.get("type") != 0:
+                continue
+            for l in b.get("lines", []):
+                for s in l.get("spans", []):
+                    if not s["text"].strip():
+                        continue
+                    r = fitz.Rect(s["bbox"]) * m
+                    page_spans.append(dict(
+                        page=pno + 1,
+                        text=s["text"],
+                        bbox=[round(v, 2) for v in r],
+                        font=s["font"], size=round(s["size"], 2), flags=s["flags"],
+                    ))
+        page_images = []
+        seen_xrefs = set()
+        # resource-dict xrefs (never loads streams; survives corrupt/unloadable images)
+        res_xrefs = {im[0] for im in page.get_images(full=True) if im and im[0] and im[0] > 0}
+        try:
+            img_infos = page.get_image_info(xrefs=True)
+        except Exception:
+            # a corrupt image on this page makes xref-loading fail; record what we can
+            # from the resource dict (bbox unknown) - the unextractable check blocks later
+            img_infos = []
+        for info in img_infos:
+            xref = info.get("xref")
+            if not isinstance(xref, int) or xref <= 0 or xref in seen_xrefs:
+                continue
+            seen_xrefs.add(xref)
+            r = fitz.Rect(info["bbox"]) * m
+            page_images.append(dict(xref=xref, bbox=[round(v, 2) for v in r]))
+        for x in sorted(res_xrefs - seen_xrefs):
+            page_images.append(dict(xref=x, bbox=None))
+        drawings = []
+        for dr in page.get_drawings():
+            r = fitz.Rect(dr["rect"]) * m
+            drawings.append(dict(type=dr["type"], bbox=[round(v, 2) for v in r],
+                                 fill=dr.get("fill"), stroke=dr.get("color")))
+        links = [{**l, "from": [round(v, 2) for v in fitz.Rect(l["from"])]} if "from" in l else l
+                 for l in page.get_links()]
+        annots = [list(a.type) for a in (page.annots() or [])]
+        pages_data.append(dict(page=pno + 1, spans=page_spans, images=page_images,
+                               drawings=drawings, links=links, annots=annots,
+                               hidden_text_runs=[h for h in hidden_text_report if h["page"] == pno + 1],
+                               rotation=page.rotation,
+                               mediabox=[round(v, 2) for v in page.mediabox],
+                               display_rect=[round(v, 2) for v in page.rect]))
+        all_spans.extend(page_spans)
+
+    coord_note = P.page_coordinate_note(pages_data[0]["rotation"],
+                                        pages_data[0]["display_rect"], lay)
+
+    # ---------- 4. marker segmentation (independent replay, cross-checked) ----------
+    MARKER, ANSWER, OPTION = ns["MARKER"], ns["ANSWER"], ns["OPTION"]
+    STRUCTURAL_EXACT = ns["STRUCTURAL_EXACT"]
+    pre_marker = []
+    segments = []
+    cur = None
+    for s in all_spans:
+        t = s["text"].strip()
+        mm = MARKER.match(t)
+        if mm:
+            cur = int(mm.group(1))
+            segments.append((cur, [s]))
+            continue
+        (segments[-1][1] if cur is not None else pre_marker).append(s)
+
+    seg_nums = [n for n, _ in segments]
+    assert seg_nums == list(range(1, len(segments) + 1)), "question markers not sequential"
+    assert len(segments) == len(split), f"segment count {len(segments)} != split {len(split)}"
+
+    # ---------- 5. assets: extract all embedded binaries ----------
+    assets_dir = f"{out_dir}/assets"
+    os.makedirs(assets_dir, exist_ok=True)
+    xref_asset = {}
+    xref_info = {}
+    unextractable = []
+    for x in range(1, doc.xref_length()):
+        try:
+            if doc.xref_get_key(x, "Subtype")[1] == "/Image":
+                try:
+                    info = doc.extract_image(x)
+                except Exception as e:
+                    unextractable.append(dict(xref=x, error=repr(e)[:200]))
+                    continue
+                raw = info["image"]
+                h = P.sha256_bytes(raw)
+                ext = {"jpeg": "jpg", "jpx": "jpx", "png": "png", "tiff": "tiff"}.get(info["ext"], info["ext"])
+                fname = f"{h}.{ext}"
+                if not os.path.exists(f"{assets_dir}/{fname}"):
+                    with open(f"{assets_dir}/{fname}", "wb") as f:
+                        f.write(raw)
+                xref_asset[x] = fname
+                xref_info[x] = dict(ext=ext, width=info["width"], height=info["height"],
+                                    colorspace=info["colorspace"], bpc=info["bpc"], bytes=len(raw))
+        except Exception:
+            pass
+    if unextractable:
+        # Only page-REFERENCED image streams are hard blockers (a corrupt unreferenced
+        # object is not our data); fail loudly instead of emitting an incomplete layer.
+        referenced = {im["xref"] for p in pages_data for im in p["images"]}
+        blocking = [u for u in unextractable if u["xref"] in referenced]
+        if blocking:
+            print("FATAL: BLOCKED_UNEXTRACTABLE_IMAGE_STREAMS:", blocking[:5])
+            return 3
+
+    pmap = P.jload(paths["pmap"])
+
+    arch_media = {}
+    if archived_media_dir and os.path.isdir(archived_media_dir):
+        for f in sorted(os.listdir(archived_media_dir)):
+            arch_media[P.sha256_file(f"{archived_media_dir}/{f}")] = f
+
+    def archived_match(asset_path, q, role):
+        h = P.sha256_file(asset_path)
+        if h in arch_media:
+            return arch_media[h], "byte_identical"
+        want = "answer-review" if role == "answer_reference" else None
+        if want is None:
+            want = "exhibit" if "exhibit" in (role or "") else "answer-area"
+        for fh, f in arch_media.items():
+            if f.startswith(q + "-") and want in f:
+                try:
+                    from PIL import Image
+                    import numpy as np
+                    a = np.asarray(Image.open(asset_path).convert("RGB"))
+                    b = np.asarray(Image.open(f"{archived_media_dir}/{f}").convert("RGB"))
+                    if a.shape == b.shape and np.abs(a.astype(int) - b.astype(int)).max() == 0:
+                        return f, "pixel_identical_reencoded"
+                except Exception:
+                    continue
+        return None, None
+
+    # ---------- 6. per-question records ----------
+    vra_by_xref = {r["xref"]: r for r in vra["image_roles"]}
+    recon_active = {r["pdf_xref"]: r for r in recon["active_source_roles"]}
+    recon_sup = {r["pdf_xref"]: r for r in recon["superseded_source_roles"]}
+    vt_by_q = vt if isinstance(vt, dict) else {}
+    vsd_sel = {s["question_key"]: s for s in vsd.get("selections", [])}
+    vd_by_q = visual_draft if isinstance(visual_draft, dict) else {}
+
+    note_text_opts = lay.get("options_note_text_options",
+                             "Option text extracted from the PDF text layer, order preserved.")
+    note_in_image = lay.get("options_note_in_image",
+                            "Option letters appear in the PDF text layer with empty values; the real "
+                            "choices are inside the question prompt image (VCE-style visual item).")
+    note_placeholder = lay.get("options_note_placeholder",
+                               "Option letters appear in the PDF text layer carrying only the VCE "
+                               "template placeholder text; the real choices are inside the question "
+                               "prompt image (VCE-style visual item). Placeholder text is preserved "
+                               "verbatim as source evidence, never 'corrected'.")
+
+    def usage_id(pname, xref):
+        return "u-" + pname.rsplit(".", 1)[0].replace("p-", "p").replace("_", "-") + f"-x{xref}"
+
+    def image_usage(pname, role, privacy, q, sub_role=None):
+        xref = pmap[pname]["xref"]
+        page = int(pname.split("-")[1].split("_")[0])
+        bbox = None
+        for p in pages_data:
+            if p["page"] == page:
+                for im in p["images"]:
+                    if im["xref"] == xref:
+                        bbox = im["bbox"]
+        u = dict(usage_id=usage_id(pname, xref), pdftohtml_name=pname, xref=xref, page=page,
+                 role=role, privacy=privacy, asset=xref_asset[xref],
+                 asset_sha256=xref_asset[xref].rsplit(".", 1)[0])
+        if sub_role:
+            u["sub_role"] = sub_role
+        if bbox:
+            u["bbox_display"] = bbox
+        u["binary"] = xref_info[xref]
+        am, method = archived_match(f"{assets_dir}/{xref_asset[xref]}", q, role)
+        u["archived_media_match"] = am
+        u["archived_media_match_method"] = method
+        return u
+
+    questions = OrderedDict()
+    component_totals = Counter()
+    for n, spans in segments:
+        q = f"q{n:03d}"
+        rec = split[q]
+        state = "stem"
+        comp_of = []
+        opt_labels = []
+        for s in spans:
+            t = s["text"].strip()
+            if MARKER.match(t):
+                comp_of.append((s, "marker"))
+                continue
+            am = ANSWER.match(t)
+            if am:
+                state = "answer"
+                comp_of.append((s, "answer_marker"))
+                continue
+            if t in STRUCTURAL_EXACT or t.lower() in {x.lower() for x in STRUCTURAL_EXACT}:
+                state = "after"
+                comp_of.append((s, "structural"))
+                continue
+            if state == "answer":
+                comp_of.append((s, "answer_text"))
+                continue
+            if state == "after":
+                comp_of.append((s, "after_explanation"))
+                continue
+            om = OPTION.match(t)
+            if om:
+                state = "opts"
+                opt_labels.append(om.group(1))
+                comp_of.append((s, "option_label"))
+                continue
+            if state == "opts":
+                comp_of.append((s, "option_text"))
+            else:
+                comp_of.append((s, "stem"))
+        for _, c in comp_of:
+            component_totals[c] += 1
+
+        marker_pages = sorted({s["page"] for s in spans if MARKER.match(s["text"].strip())})
+        body_pages = sorted({s["page"] for s in spans if not MARKER.match(s["text"].strip())})
+        img_pages = sorted({int(pn.split("-")[1].split("_")[0])
+                            for pn in rec["question_images"] + rec["answer_images"]})
+        upstream_pages = sorted(set(body_pages) | set(img_pages))
+        pages = sorted(set(body_pages) | set(img_pages) | set(marker_pages))
+        assert upstream_pages == rec["pages"], f"{q}: upstream page sets differ {upstream_pages} vs {rec['pages']}"
+
+        stem_spans = [s for s, c in comp_of if c == "stem"]
+        stem_raw = " ".join(s["text"].strip() for s in stem_spans)
+        norm_log = []
+        stem_upstream = rec["stem"]
+        if stem_raw != stem_upstream:
+            norm_log.append(dict(kind="whitespace_or_ligature_normalization_by_upstream_extractor",
+                                 raw=stem_raw, upstream_normalized=stem_upstream))
+
+        visual_q = P.is_visual_question(rec, ns)
+
+        options_entries = []
+        for label, text in rec["options"].items():
+            options_entries.append(dict(label=label.upper(), text=text,
+                                        source="pdf_text_layer"))
+        empty_labels = [l for l in opt_labels] if not rec["options"] else []
+
+        # options record (three genuine modes; placeholder-aware)
+        if rec["options"] and not visual_q:
+            options_rec = dict(mode="text_options",
+                               labels_present_in_text_layer=[o["label"] for o in options_entries],
+                               entries=options_entries,
+                               note=note_text_opts)
+        elif rec["options"] and visual_q:
+            options_rec = dict(mode="in_question_image",
+                               labels_present_in_text_layer=[o["label"] for o in options_entries],
+                               entries=options_entries,
+                               note=note_placeholder)
+        elif empty_labels:
+            options_rec = dict(mode="in_question_image",
+                               labels_present_in_text_layer=empty_labels,
+                               entries=options_entries,
+                               note=note_in_image)
+        else:
+            options_rec = dict(mode="none", entries=[], note="no options")
+
+        # answer
+        ans_raw = rec["answer_raw"]
+        aimgs = rec["answer_images"]
+        if ans_raw.strip() and aimgs:
+            ans_kind = ANSWER_KIND_BOTH
+        elif ans_raw.strip():
+            ans_kind = ANSWER_KIND_TYPED
+        elif aimgs:
+            ans_kind = ANSWER_KIND_IMAGE
+        else:
+            ans_kind = ANSWER_KIND_MISSING
+
+        # media usages with roles
+        qimgs = rec["question_images"]
+        usages = []
+        for i, pn in enumerate(qimgs):
+            if visual_q:
+                if i == len(qimgs) - 1:
+                    role, sub = "question_prompt", "primary_prompt_image"
+                else:
+                    role, sub = "exhibit", "additional_question_image"
+            else:
+                role, sub = "exhibit", "text_keyed_question_supporting_image"
+            usages.append(image_usage(pn, role, "learner_visible_after_review", q, sub))
+        for pn in aimgs:
+            usages.append(image_usage(pn, "answer_reference", "private_reviewer_only", q))
+
+        # question type (site taxonomy, justified)
+        # P0-A (director audit 2026-11-13): for image-based questions the type
+        # MUST come from visual evidence (pinned OCR kind / prior drafts), NEVER
+        # from a typed letter: in these VCE-style sources the typed letter is a
+        # template literal (observed 'A' for all combined-key items), not a
+        # validated widget type or complete key. Text-only questions keep the
+        # high-confidence typed-key classification.
+        typed_key_status = None
+        if visual_q and ans_kind in (ANSWER_KIND_TYPED, ANSWER_KIND_BOTH):
+            typed_key_status = (
+                "source_literal_only_key_status_unknown: the typed text is preserved verbatim "
+                "as source evidence but is NOT a validated widget type or complete key; the "
+                "choices/selections live in the question and answer images")
+        if rec["options"] and ans_kind == ANSWER_KIND_TYPED and not visual_q:
+            letters = re.findall(r'[A-H]', ans_raw.upper())
+            if len(letters) > 1:
+                qtype = "multiple_select"
+                basis = f"text options with multi-letter typed key '{ans_raw}'"
+            else:
+                qtype = "single_choice"
+                basis = f"text options with single-letter typed key '{ans_raw}'"
+            conf = "high"
+        elif visual_q:
+            vd = vd_by_q.get(q, {})
+            kind = vd.get("kind")
+            if kind == "yes_no":
+                qtype = "yes_no_matrix"
+                basis = "visual item classified yes_no by pinned analyze_visual.py OCR pass"
+                conf = "medium"
+            elif kind == "dropdown":
+                vt_rec = vt_by_q.get(q) or {}
+                blanks = vt_rec.get("blanks") or vd.get("blanks") or []
+                nb = len(blanks)
+                if nb == 1:
+                    qtype = "inline_dropdown"
+                elif nb > 1:
+                    qtype = "multi_blank_dropdown"
+                else:
+                    qtype = "inline_dropdown"
+                basis = (f"visual item classified dropdown by pinned analyze_visual.py OCR pass; "
+                         f"{nb if nb else 'unknown'} blank(s) from prior transcription drafts")
+                conf = "medium"
+            else:
+                qtype, basis, conf = "unknown", "visual item with no pinned visual draft kind", "low"
+            if typed_key_status:
+                basis += (f"; typed source literal '{ans_raw}' preserved but not used for typing "
+                          f"(key status unknown)")
+        else:
+            qtype, basis, conf = "unknown", "no options and no typed key", "low"
+
+        # editorial overlay status
+        overlay_status = "active_in_current_site_draft"
+        sup = None
+        if q in replaced_by:
+            overlay_status = "superseded_by_editorial_replacement"
+            sup = replaced_by[q]
+
+        # answer candidates (never promoted to keys)
+        candidates = []
+        editorial_overlay = []
+        vd = vd_by_q.get(q, {})
+        if vd.get("key"):
+            candidates.append(dict(source="pinned_upstream_analyze_visual_ocr_draft",
+                                   value=vd["key"], approved=False))
+        vt_rec = vt_by_q.get(q)
+        if vt_rec and vt_rec.get("key") is not None:
+            if vt_rec.get("source") == EDITORIAL_PROVENANCE:
+                # P1-5 (director audit 2026-11-13): a draft explicitly marked
+                # as CertPassly-team EDITORIAL content (not owner PDF) must
+                # NEVER appear as a PDF answer-transcription candidate. It is
+                # kept in a separate, explicitly-provenanced overlay field;
+                # selection_candidates_unapproved stays PDF-derived only.
+                editorial_overlay.append(dict(
+                    provenance=EDITORIAL_PROVENANCE,
+                    value=vt_rec["key"], approved=False,
+                    note=vt_rec.get("note", "")))
+            else:
+                candidates.append(dict(source="prior_manual_visual_transcription_draft",
+                                       value=vt_rec["key"], approved=False))
+        sel = vsd_sel.get(q)
+        if sel and sel.get("selected_text"):
+            candidates.append(dict(source="prior_manual_screenshot_selection_draft",
+                                   value=sel["selected_text"], approved=False))
+
+        answer_rec = dict(
+            raw_text=ans_raw,
+            source_kind=ans_kind,
+            privacy="private_reviewer_only" if ans_kind in (ANSWER_KIND_IMAGE, ANSWER_KIND_BOTH)
+                    else "source_public_within_private_repo",
+            answer_image_usages=[u["usage_id"] for u in usages if u["role"] == "answer_reference"],
+            selection_candidates_unapproved=candidates,
+        )
+        if editorial_overlay:
+            # P1-5: separate overlay field, correct provenance, never mixed
+            # into the transcription candidates and never approved.
+            answer_rec["editorial_overlay_candidates"] = editorial_overlay
+        if typed_key_status:
+            # P0-A: the typed letter on an image-based question is a source
+            # literal, never a trusted key/widget inference.
+            answer_rec["typed_key_status"] = typed_key_status
+        if ans_kind == ANSWER_KIND_BOTH:
+            answer_rec["source_kind_extension_note"] = (
+                "structured/v1 compatible extension: this source question carries BOTH a typed key "
+                "and an answer-reference screenshot. Privacy is fail-closed (private_reviewer_only) "
+                "because the answer-reference image is part of the answer evidence.")
+
+        qrec = dict(
+            schema_version=SCHEMA_VERSION,
+            exam_code=exam,
+            question_id=q,
+            source_number=n,
+            marker=rec["marker"],
+            layout_profile=rec["layout_profile"],
+            pages=pages,
+            upstream_pages_field=upstream_pages,
+            page_note=("pages includes the question marker's own page; upstream_pages_field matches "
+                       "the pinned extractor's pages field (marker page only counted when body/images "
+                       "also occur there)."),
+            stem=dict(raw=stem_raw,
+                      upstream_normalized=stem_upstream,
+                      normalizations=norm_log),
+            options=options_rec,
+            answer=answer_rec,
+            media_usages=usages,
+            question_type=dict(site_format_type=qtype, basis=basis, confidence=conf),
+            editorial_overlay_status=overlay_status,
+            editorial_replacement_id=sup,
+            provenance=dict(
+                pdf_sha256=pdf_sha,
+                extracted_by=EXTRACTED_BY,
+                upstream_split_question_key=q,
+                upstream_item_sha256=P.sha256_bytes(json.dumps(rec, indent=1, ensure_ascii=False).encode()),
+            ),
+            review=dict(status="machine_extracted", human_approved=False,
+                        visual_review_required=bool(usages)),
+            text_run_refs=[f"p{s['page']:04d}-r{i:03d}" for i, s in enumerate(spans)],
+        )
+        questions[q] = qrec
+
+    # cross-check every question against upstream item content
+    mismatches = []
+    for q, qrec in questions.items():
+        rec = split[q]
+        if qrec["stem"]["upstream_normalized"] != rec["stem"]:
+            mismatches.append((q, "stem"))
+        if {e["label"].lower(): e["text"] for e in qrec["options"].get("entries", [])} != rec["options"]:
+            mismatches.append((q, "options"))
+        if qrec["answer"]["raw_text"] != rec["answer_raw"]:
+            mismatches.append((q, "answer_raw"))
+    assert not mismatches, f"upstream cross-check failed: {mismatches[:5]}"
+
+    # ---------- 7. page records ----------
+    qpages = {}
+    for q, qrec in questions.items():
+        for p in qrec["pages"]:
+            qpages.setdefault(p, []).append(q)
+    usage_by_page = {}
+    for q, qrec in questions.items():
+        for u in qrec["media_usages"]:
+            usage_by_page.setdefault(u["page"], []).append(u)
+
+    for p in pages_data:
+        pno = p["page"]
+        runs = []
+        seg_map = {}
+        for n, spans in segments:
+            for s in spans:
+                seg_map[(s["page"], s["text"], tuple(s["bbox"]))] = n
+        pre_set = {(s["page"], s["text"], tuple(s["bbox"])) for s in pre_marker}
+        comp_map = {}
+        for n, spans in segments:
+            state = "stem"
+            for s in spans:
+                t = s["text"].strip()
+                if MARKER.match(t):
+                    comp_map[id(s)] = "marker"; continue
+                if ANSWER.match(t):
+                    state = "answer"; comp_map[id(s)] = "answer_marker"; continue
+                if t in STRUCTURAL_EXACT or t.lower() in {x.lower() for x in STRUCTURAL_EXACT}:
+                    state = "after"; comp_map[id(s)] = "structural"; continue
+                if state == "answer":
+                    comp_map[id(s)] = "answer_text"; continue
+                if state == "after":
+                    comp_map[id(s)] = "after_explanation"; continue
+                if OPTION.match(t):
+                    state = "opts"; comp_map[id(s)] = "option_label"; continue
+                if state == "opts":
+                    comp_map[id(s)] = "option_text"
+                else:
+                    comp_map[id(s)] = "stem"
+        for i, s in enumerate(p["spans"]):
+            key = (s["page"], s["text"], tuple(s["bbox"]))
+            if key in pre_set:
+                assigned = None
+                classification = "cover_or_marketing_before_first_question"
+            else:
+                n = seg_map.get(key)
+                if n:
+                    qq = f"q{n:03d}"
+                    comp = None
+                    for n2, spans2 in segments:
+                        if n2 == n:
+                            for s2 in spans2:
+                                if (s2["page"], s2["text"], tuple(s2["bbox"])) == key:
+                                    comp = comp_map.get(id(s2))
+                                    break
+                    assigned = dict(question=qq, component=comp)
+                    classification = "question_content"
+                else:
+                    assigned = None
+                    classification = "unassigned"
+            runs.append(dict(run_id=f"p{pno:04d}-r{i:03d}", text=s["text"],
+                             bbox_display=s["bbox"], font=s["font"], size=s["size"],
+                             flags=s["flags"], classification=classification,
+                             assigned=assigned))
+        imgs = []
+        first_marker_page = min((s["page"] for n_, spans_ in segments for s in spans_
+                                 if MARKER.match(s["text"].strip())), default=9999)
+        for im in p["images"]:
+            u = next((u for u in usage_by_page.get(pno, []) if u["xref"] == im["xref"]), None)
+            if u is not None:
+                uid, role, privacy = u["usage_id"], u["role"], u["privacy"]
+            elif pno <= first_marker_page:
+                uid, role, privacy = f"u-p{pno:02d}-x{im['xref']}", "cover_decoration", "private_source_only_cover_marketing"
+            else:
+                uid, role, privacy = None, "unknown_requires_review", "fail_closed"
+            _asset = xref_asset.get(im["xref"])
+            imgs.append(dict(xref=im["xref"], bbox_display=im["bbox"],
+                             asset=_asset,
+                             asset_sha256=_asset.rsplit(".", 1)[0] if _asset else None,
+                             usage_id=uid, role=role, privacy=privacy))
+        if pno in ns["cover_pages"]:
+            page_class = "cover"
+        elif pno in ns["marketing_pages"]:
+            page_class = "marketing"
+        else:
+            page_class = "question_content"
+        prec = dict(
+            page=pno,
+            rotation=p["rotation"],
+            raw_mediabox=p["mediabox"],
+            display_rect=p["display_rect"],
+            coordinate_note=coord_note,
+            classification=page_class,
+            questions_on_page=qpages.get(pno, []),
+            text_runs=runs,
+            images=imgs,
+            vector_drawings=dict(count=len(p["drawings"]),
+                                 items=[dict(type=d["type"], bbox_display=d["bbox"],
+                                             fill=d["fill"], stroke=d["stroke"]) for d in p["drawings"]],
+                                 note=lay.get("vector_drawings_note",
+                                              "Vector drawing inventory recorded per page (type/bbox/fill/stroke).")),
+            links=p["links"],
+            annotations=p["annots"],
+            hidden_text_runs=p.get("hidden_text_runs", []),
+        )
+        P.jdump(prec, f"{out_dir}/pages/page-{pno:04d}.json")
+
+    # ---------- 8. write question records + index ----------
+    for q, qrec in questions.items():
+        P.jdump(qrec, f"{out_dir}/questions/{q}.json")
+    qindex = dict(
+        schema_version=SCHEMA_VERSION, exam_code=exam,
+        question_count=len(questions),
+        order=[dict(question_id=q, source_number=questions[q]["source_number"],
+                    pages=questions[q]["pages"],
+                    type=questions[q]["question_type"]["site_format_type"],
+                    answer_source_kind=questions[q]["answer"]["source_kind"],
+                    editorial_overlay_status=questions[q]["editorial_overlay_status"])
+               for q in questions],
+        ids_are_sequential_1_to_n=True,
+        duplicate_or_missing_markers=[],
+    )
+    P.jdump(qindex, f"{out_dir}/question-index.json")
+
+    # ---------- 9. asset usage manifest (ALL source refs) ----------
+    all_usages = []
+    for q, qrec in questions.items():
+        for u in qrec["media_usages"]:
+            u2 = dict(u)
+            u2["question_key"] = q
+            x = u["xref"]
+            if x in recon_active:
+                u2["active_packaged_media_status"] = "active"
+            elif x in recon_sup:
+                u2["active_packaged_media_status"] = "superseded_by_editorial_replacement"
+            elif vra_by_xref.get(x, {}).get("role") == "cover_decoration":
+                u2["active_packaged_media_status"] = "cover_not_packaged"
+            else:
+                u2["active_packaged_media_status"] = "not_in_archived_media"
+            vra_r = vra_by_xref.get(x)
+            if vra_r:
+                u2["prior_visual_role_audit"] = dict(page=vra_r["page"], role=vra_r["role"],
+                                                     answer_verified=vra_r.get("answer_verified"))
+            all_usages.append(u2)
+    cover_usage = None
+    question_xrefs = {u["xref"] for u in all_usages}
+    first_marker_page = min((s["page"] for n, spans in segments for s in spans
+                             if MARKER.match(s["text"].strip())), default=9999)
+    for p in pages_data:
+        if p["page"] <= first_marker_page:
+            for im in p["images"]:
+                if im["xref"] in question_xrefs:
+                    continue
+                cover_usage = dict(usage_id=f"u-p{p['page']:02d}-x{im['xref']}",
+                                   pdftohtml_name=next((n for n, m in pmap.items()
+                                                        if m["xref"] == im["xref"]
+                                                        and int(n.split("-")[1].split("_")[0]) == p["page"]), None),
+                                   xref=im["xref"], page=p["page"], role="cover_decoration",
+                                   privacy="not_for_public_export_branding",
+                                   asset=xref_asset[im["xref"]],
+                                   asset_sha256=xref_asset[im["xref"]].rsplit(".", 1)[0],
+                                   bbox_display=im["bbox"], binary=xref_info[im["xref"]],
+                                   question_key=None,
+                                   active_packaged_media_status="cover_not_packaged",
+                                   prior_visual_role_audit=None)
+    if cover_usage:
+        all_usages.append(cover_usage)
+    asset_files = sorted(os.listdir(assets_dir))
+    au = dict(
+        schema_version=SCHEMA_VERSION, exam_code=exam,
+        counts=dict(
+            source_image_usages=len(all_usages),
+            unique_binaries=len(asset_files),
+            roles=dict(Counter(u["role"] for u in all_usages)),
+            privacy=dict(Counter(u["privacy"] for u in all_usages)),
+            active_vs_superseded=dict(Counter(u["active_packaged_media_status"] for u in all_usages)),
+        ),
+        deduplication_note=lay.get("asset_deduplication_note",
+                                   "Assets are stored once per exact source binary SHA-256; every usage "
+                                   "instance keeps its own xref/page/bbox/role record."),
+        usages=all_usages,
+    )
+    P.jdump(au, f"{out_dir}/asset-usage.json")
+
+    # ---------- 10. source answer index ----------
+    sai = {}
+    for q, qrec in questions.items():
+        sai[q] = dict(
+            source_kind=qrec["answer"]["source_kind"],
+            typed_text=qrec["answer"]["raw_text"],
+            answer_reference_images=[u["asset"] for u in qrec["media_usages"]
+                                     if u["role"] == "answer_reference"],
+            privacy="private_reviewer_only" if qrec["answer"]["source_kind"] in
+                    (ANSWER_KIND_IMAGE, ANSWER_KIND_BOTH) else "source_public_within_private_repo",
+            owner_key_verified=False,
+            note=("Original source answer only. Never a guessed key; AI/research candidates live in "
+                  "visual-transcription-drafts.json and review evidence, all unapproved."),
+        )
+    P.jdump(dict(schema_version=SCHEMA_VERSION, exam_code=exam,
+                 answer_count=dict(Counter(v["source_kind"] for v in sai.values())),
+                 questions=sai), f"{out_dir}/source-answer-index.json")
+
+    # ---------- 11. visual transcription drafts (explicitly unapproved) ----------
+    vtd = dict(
+        schema_version=SCHEMA_VERSION, exam_code=exam,
+        status="PRIVATE_DRAFT_UNAPPROVED",
+        warning=("OCR and prior manual transcription candidates only. None of these values is an "
+                 "owner-verified or human-approved key. Never export to learner-facing outputs."),
+        sources=dict(
+            pinned_upstream_visual_draft=dict(
+                script="scripts/analyze_visual.py",
+                repo=cfg.get("upstream", {}).get("repo", "msaqlainhaneef1/certpassly-exam-pipeline"),
+                commit=cfg.get("upstream", {}).get("commit"),
+                entries=len(vd_by_q),
+                kinds=dict(Counter(v.get("kind") for v in vd_by_q.values()))),
+            prior_manual_visual_transcription=dict(
+                file=f"exams/{exam}/visual_transcription.json", entries=len(vt_by_q)),
+            prior_manual_selection_drafts=dict(
+                file=f"exams/{exam}/visual-source-selection-drafts.json",
+                entries=len(vsd.get("selections", []))),
+        ),
+        entries={},
+    )
+    for q in questions:
+        e = {}
+        vd = vd_by_q.get(q)
+        if vd:
+            e["pinned_upstream_ocr_draft"] = dict(kind=vd.get("kind"), key=vd.get("key"),
+                                                  boxes=vd.get("boxes"), notes=vd.get("notes"))
+        vt_rec = vt_by_q.get(q)
+        if vt_rec:
+            e["prior_manual_transcription_draft"] = vt_rec
+        sel = vsd_sel.get(q)
+        if sel:
+            e["prior_manual_selection_draft"] = sel
+        if e:
+            vtd["entries"][q] = e
+    P.jdump(vtd, f"{out_dir}/visual-transcription-drafts.json")
+
+    # ---------- 12. unresolved ----------
+    unresolved = []
+    for q, qrec in questions.items():
+        if qrec["answer"]["source_kind"] == ANSWER_KIND_MISSING:
+            unresolved.append(dict(item=q, reason_code="answer_missing_in_source",
+                                   detail="No typed key and no answer image in the source PDF."))
+        if qrec["question_type"]["site_format_type"] == "unknown":
+            unresolved.append(dict(item=q, reason_code="question_type_unknown", detail="no basis for a site type"))
+        vd = vd_by_q.get(q)
+        if qrec["answer"]["source_kind"] == ANSWER_KIND_IMAGE and (not vd or not vd.get("key")):
+            unresolved.append(dict(item=q, reason_code="visual_key_not_machine_readable",
+                                   detail="Answer image exists but pinned OCR pass produced no candidate key; human visual review required."))
+    # carried disputes: config-declared per exam (prior private review evidence), never hardcoded
+    for c in cfg.get("carried_unresolved", []):
+        unresolved.append(dict(item=c["item"], reason_code=c["reason_code"], detail=c["detail"]))
+    for h in hidden_text_report:
+        unresolved.append(dict(item=f"page-{h['page']}", reason_code="hidden_text_detected",
+                               detail=f"Invisible-text render-mode span on page {h['page']} "
+                                      f"(kept in the page record, never treated as visible content): {h['text'][:60]!r}"))
+    P.jdump(dict(schema_version=SCHEMA_VERSION, exam_code=exam,
+                 count=len(unresolved),
+                 policy=("Fail-closed: every ambiguity is listed, none is silently dropped or guessed. "
+                         "This file must reach zero only through genuine review, not by deletion."),
+                 items=unresolved), f"{out_dir}/unresolved.json")
+
+    # ---------- 13. schema + README (machine-managed static docs) ----------
+    schema_text, _schema_obj = build_schema(cfg)
+    with open(f"{out_dir}/extraction-schema.json", "w", encoding='utf-8') as f:
+        f.write(schema_text)
+    stats = dict(
+        pdf=dict(sha256=pdf_sha, bytes=pdf_bytes, page_count=doc.page_count,
+                 metadata=meta, encrypted=doc.is_encrypted),
+        split_sha256=split_sha,
+        segments=len(segments),
+        pre_marker_spans=len(pre_marker),
+        component_totals=dict(component_totals),
+        questions=len(questions),
+        assets=len(asset_files),
+        usages=len(all_usages),
+        roles=dict(Counter(u["role"] for u in all_usages)),
+        answer_kinds=dict(Counter(qrec["answer"]["source_kind"] for qrec in questions.values())),
+        types=dict(Counter(qrec["question_type"]["site_format_type"] for qrec in questions.values())),
+        overlay=dict(Counter(qrec["editorial_overlay_status"] for qrec in questions.values())),
+    )
+    with open(f"{out_dir}/README.md", "w", encoding='utf-8') as f:
+        f.write(build_readme(cfg, stats, meta))
+    bs = paths.get("build_stats")
+    if bs:
+        P.jdump(stats, bs)
+    print(json.dumps(stats, indent=1)[:2600])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1]))

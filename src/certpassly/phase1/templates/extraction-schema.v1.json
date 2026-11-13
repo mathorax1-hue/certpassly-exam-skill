@@ -1,0 +1,174 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "$id": "certpassly/structured/v1/extraction-schema",
+ "title": "CertPassly private structured extraction layer v1 (AB-900 pilot)",
+ "description": "Machine-checkable schema for the ZAI-EXTRACT-001 source-grounded extraction layer. Every record is private. Answer-reference material is fail-closed: it may exist only in this private layer, never in exports.",
+ "definitions": {
+  "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+  "usage_id": {"type": "string", "pattern": "^u-p[0-9]+-[0-9]+-x[0-9]+$"},
+  "role": {"enum": ["question_prompt", "exhibit", "answer_reference", "cover_decoration", "unknown_requires_review"]},
+  "privacy": {"enum": ["learner_visible_after_review", "private_reviewer_only", "private_source_only_cover_marketing", "not_for_public_export_branding", "fail_closed"]},
+  "component": {"enum": ["marker", "stem", "option_label", "option_text", "answer_marker", "answer_text", "structural", "after_explanation"]},
+  "question_type": {"enum": ["single_choice", "multiple_select", "true_false", "image_based_choice", "scenario_standalone", "yes_no_matrix", "single_choice_matrix", "multi_select_matrix", "inline_dropdown", "multi_blank_dropdown", "text_cloze", "ordering", "matching", "categorization", "drag_drop", "hotspot_single", "hotspot_multi", "case_study_group", "active_screen", "short_text", "numeric", "multimedia_stimulus", "sectioned_delivery", "unscored_pretest", "adaptive_delivery", "simulation_ui", "terminal_task", "lab_task", "code_answer", "testlet", "unknown"]},
+  "bbox": {
+   "type": "array", "minItems": 4, "maxItems": 4,
+   "items": {"type": "number"},
+   "description": "[x0, y0, x1, y1] in display points (after page rotation), origin top-left."
+  },
+  "media_usage": {
+   "type": "object",
+   "required": ["usage_id", "xref", "page", "role", "privacy", "asset", "asset_sha256"],
+   "properties": {
+    "usage_id": {"$ref": "#/definitions/usage_id"},
+    "pdftohtml_name": {"type": "string"},
+    "xref": {"type": "integer", "minimum": 1},
+    "page": {"type": "integer", "minimum": 1},
+    "role": {"$ref": "#/definitions/role"},
+    "sub_role": {"type": "string"},
+    "privacy": {"$ref": "#/definitions/privacy"},
+    "asset": {"type": "string", "pattern": "^[a-f0-9]{64}\\.(jpg|png|jpx|tiff)$"},
+    "asset_sha256": {"$ref": "#/definitions/sha256"},
+    "bbox_display": {"$ref": "#/definitions/bbox"},
+    "binary": {"type": "object"},
+    "archived_media_match": {"type": ["string", "null"]},
+    "active_packaged_media_status": {"enum": ["active", "superseded_by_editorial_replacement", "cover_not_packaged", "not_in_archived_media"]},
+    "prior_visual_role_audit": {"type": "object"},
+    "question_key": {"type": ["string", "null"]}
+   }
+  },
+  "question_record": {
+   "type": "object",
+   "required": ["schema_version", "exam_code", "question_id", "source_number", "marker", "pages", "stem", "options", "answer", "media_usages", "question_type", "provenance", "review"],
+   "properties": {
+    "schema_version": {"const": "structured-v1"},
+    "exam_code": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,20}$"},
+    "question_id": {"type": "string", "pattern": "^q[0-9]{3,4}$"},
+    "source_number": {"type": "integer", "minimum": 1},
+    "marker": {"type": "string"},
+    "layout_profile": {"type": "string"},
+    "pages": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}},
+    "upstream_pages_field": {"type": "array", "items": {"type": "integer"}},
+    "page_note": {"type": "string"},
+    "stem": {
+     "type": "object",
+     "required": ["raw"],
+     "properties": {
+      "raw": {"type": "string"},
+      "upstream_normalized": {"type": "string"},
+      "normalizations": {"type": "array", "items": {"type": "object"}}
+     }
+    },
+    "options": {
+     "type": "object",
+     "required": ["mode"],
+     "properties": {
+      "mode": {"enum": ["text_options", "in_question_image", "none"]},
+      "labels_present_in_text_layer": {"type": "array", "items": {"type": "string", "pattern": "^[A-F]$"}},
+      "entries": {"type": "array", "items": {"type": "object", "required": ["label", "text"], "properties": {"label": {"type": "string", "pattern": "^[A-Fa-f]$"}, "text": {"type": "string"}, "source": {"type": "string"}}}},
+      "note": {"type": "string"}
+     }
+    },
+    "answer": {
+     "type": "object",
+     "required": ["raw_text", "source_kind", "privacy"],
+     "properties": {
+      "raw_text": {"type": "string"},
+      "source_kind": {"enum": ["owner_typed_text", "answer_reference_image", "missing"]},
+      "privacy": {"type": "string"},
+      "answer_image_usages": {"type": "array", "items": {"$ref": "#/definitions/usage_id"}},
+      "selection_candidates_unapproved": {"type": "array", "items": {"type": "object", "required": ["source", "value", "approved"], "properties": {"source": {"type": "string"}, "value": {}, "approved": {"const": false}}}},
+      "editorial_overlay_candidates": {"type": "array", "items": {"type": "object", "required": ["provenance", "value", "approved"], "properties": {"provenance": {"const": "original_certpassly_team_editorial_not_owner_pdf"}, "value": {}, "approved": {"const": false}, "note": {"type": "string"}}}}
+     }
+    },
+    "media_usages": {"type": "array", "items": {"$ref": "#/definitions/media_usage"}},
+    "question_type": {
+     "type": "object",
+     "required": ["site_format_type", "basis", "confidence"],
+     "properties": {
+      "site_format_type": {"$ref": "#/definitions/question_type"},
+      "basis": {"type": "string"},
+      "confidence": {"enum": ["high", "medium", "low"]}
+     }
+    },
+    "editorial_overlay_status": {"enum": ["active_in_current_site_draft", "superseded_by_editorial_replacement"]},
+    "editorial_replacement_id": {"type": ["string", "null"]},
+    "provenance": {
+     "type": "object",
+     "required": ["pdf_sha256", "extracted_by"],
+     "properties": {
+      "pdf_sha256": {"$ref": "#/definitions/sha256"},
+      "extracted_by": {"type": "string"},
+      "upstream_split_question_key": {"type": "string"},
+      "upstream_item_sha256": {"type": "string"}
+     }
+    },
+    "review": {
+     "type": "object",
+     "required": ["status", "human_approved", "visual_review_required"],
+     "properties": {
+      "status": {"const": "machine_extracted"},
+      "human_approved": {"const": false},
+      "visual_review_required": {"type": "boolean"}
+     }
+    },
+    "text_run_refs": {"type": "array", "items": {"type": "string", "pattern": "^p[0-9]{4}-r[0-9]{3}$"}}
+   }
+  },
+  "page_record": {
+   "type": "object",
+   "required": ["page", "rotation", "raw_mediabox", "display_rect", "classification", "text_runs", "images"],
+   "properties": {
+    "page": {"type": "integer", "minimum": 1},
+    "rotation": {"type": "integer"},
+    "raw_mediabox": {"type": "array", "items": {"type": "number"}},
+    "display_rect": {"type": "array", "items": {"type": "number"}},
+    "coordinate_note": {"type": "string"},
+    "classification": {"enum": ["cover", "marketing", "question_content"]},
+    "questions_on_page": {"type": "array", "items": {"type": "string"}},
+    "text_runs": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": ["run_id", "text", "bbox_display", "classification"],
+      "properties": {
+       "run_id": {"type": "string", "pattern": "^p[0-9]{4}-r[0-9]{3}$"},
+       "text": {"type": "string"},
+       "bbox_display": {"$ref": "#/definitions/bbox"},
+       "font": {"type": "string"},
+       "size": {"type": "number"},
+       "flags": {"type": "integer"},
+       "classification": {"enum": ["question_content", "cover_or_marketing_before_first_question", "unassigned"]},
+       "assigned": {"type": ["object", "null"]}
+      }
+     }
+    },
+    "images": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": ["xref", "bbox_display", "asset", "asset_sha256", "role", "privacy"],
+      "properties": {
+       "xref": {"type": "integer"},
+       "bbox_display": {"$ref": "#/definitions/bbox"},
+       "asset": {"type": "string"},
+       "asset_sha256": {"$ref": "#/definitions/sha256"},
+       "usage_id": {"type": ["string", "null"]},
+       "role": {"$ref": "#/definitions/role"},
+       "privacy": {"$ref": "#/definitions/privacy"}
+      }
+     }
+    },
+    "vector_drawings": {"type": "object"},
+    "links": {"type": "array"},
+    "annotations": {"type": "array"}
+   }
+  }
+ },
+ "type": "object",
+ "required": ["schema_version", "exam_code", "question_id"],
+ "properties": {
+  "schema_version": {"const": "structured-v1"},
+  "exam_code": {"type": "string"},
+  "question_id": {"type": "string"}
+ }
+}

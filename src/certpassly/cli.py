@@ -14,6 +14,39 @@ from .pipeline import PlanError, run_plan
 from .upstream import STAGE_NAMES, run_upstream
 
 
+def _phase1_info() -> int:
+    """Print Phase 1 extraction toolkit version/compatibility metadata."""
+    from . import phase1
+    print(json.dumps({
+        "toolkit": phase1.TOOLKIT_NAME,
+        "toolkit_version": phase1.TOOLKIT_VERSION,
+        "structured_schema_version": phase1.STRUCTURED_SCHEMA_VERSION,
+        "schema_compatible_extensions": list(phase1.SCHEMA_COMPATIBLE_EXTENSIONS),
+        "upstream_repo": phase1.UPSTREAM_REPO,
+        "upstream_pin": phase1.UPSTREAM_PIN,
+        "network_access": "none (strictly local; no upload/publication behavior)",
+        "release_authority": False,
+    }, indent=2))
+    return 0
+
+
+def _phase1_audit(argv: list[str]) -> int:
+    """Read-only source PDF audit; requires the 'pdf' extra (PyMuPDF)."""
+    try:
+        from .phase1 import audit_source
+    except ImportError as exc:
+        print(f"ERROR: phase1-audit requires the pdf extra (PyMuPDF): {exc}", file=sys.stderr)
+        return 3
+    return audit_source.run_audit(argv)
+
+
+def _phase1_extract(argv: list[str]) -> int:
+    """Deterministic stage/resume orchestrator for one exam config."""
+    from .phase1 import run_all
+    return run_all.run_cli(argv)
+
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="certpassly", description="CertPassly Exam Skill orchestration")
     parser.add_argument("--version", action="version", version=__version__)
@@ -39,6 +72,23 @@ def main(argv: list[str] | None = None) -> int:
     upstream.add_argument("--stage", choices=STAGE_NAMES, action="append", required=True)
     upstream.add_argument("--online", action="store_true", help="Opt into network retrieval (offline by default)")
     upstream.add_argument("--dry-run", action="store_true")
+    p1info = sub.add_parser("phase1-info", help="Phase 1 extraction toolkit version/compatibility metadata")
+    p1audit = sub.add_parser("phase1-audit", help="Read-only source PDF audit (identity/integrity gate)")
+    p1audit.add_argument("--pdf", required=True)
+    p1audit.add_argument("--expected-sha256")
+    p1audit.add_argument("--expected-bytes", type=int)
+    p1audit.add_argument("--marker-regex")
+    p1audit.add_argument("--answer-regex")
+    p1audit.add_argument("--tool-label")
+    p1audit.add_argument("--out")
+    p1extract = sub.add_parser("phase1-extract", help="Run the Phase 1 stage pipeline for one exam config")
+    p1extract.add_argument("--config", required=True)
+    p1extract.add_argument("--upstream-scripts", required=True)
+    p1extract.add_argument("--adversarial-base")
+    p1extract.add_argument("--skip-adversarial", action="store_true")
+    p1extract.add_argument("--dry-run", action="store_true")
+    p1extract.add_argument("--resume", action="store_true")
+    p1extract.add_argument("--start-from")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "doctor":
@@ -80,6 +130,36 @@ def main(argv: list[str] | None = None) -> int:
                 path.write_text(serial, encoding="utf-8")
             print(serial.rstrip())
             return 2 if args.strict and report["status"] == "blocked" else 0
+        if args.cmd == "phase1-info":
+            return _phase1_info()
+        if args.cmd == "phase1-audit":
+            argv = ["--pdf", args.pdf]
+            if args.expected_sha256:
+                argv += ["--expected-sha256", args.expected_sha256]
+            if args.expected_bytes is not None:
+                argv += ["--expected-bytes", str(args.expected_bytes)]
+            if args.marker_regex:
+                argv += ["--marker-regex", args.marker_regex]
+            if args.answer_regex:
+                argv += ["--answer-regex", args.answer_regex]
+            if args.tool_label:
+                argv += ["--tool-label", args.tool_label]
+            if args.out:
+                argv += ["--out", args.out]
+            return _phase1_audit(argv)
+        if args.cmd == "phase1-extract":
+            argv = ["--config", args.config, "--upstream-scripts", args.upstream_scripts]
+            if args.adversarial_base:
+                argv += ["--adversarial-base", args.adversarial_base]
+            if args.skip_adversarial:
+                argv += ["--skip-adversarial"]
+            if args.dry_run:
+                argv += ["--dry-run"]
+            if args.resume:
+                argv += ["--resume"]
+            if args.start_from:
+                argv += ["--start-from", args.start_from]
+            return _phase1_extract(argv)
     except (ValueError, OSError, json.JSONDecodeError, PlanError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

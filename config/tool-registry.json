@@ -174,6 +174,116 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "phase1_source_audit",
+      "path": "src/certpassly/phase1/audit_source.py",
+      "test": "tests/test_phase1_audit.py",
+      "command": "certpassly phase1-audit --pdf PRIVATE/source.pdf [--expected-sha256 HEX --expected-bytes N --out audit.json] (read-only)",
+      "dependencies": "Python >=3.11; pdf extra (PyMuPDF>=1.24,<2)",
+      "side_effects": "read-only; optional local audit JSON via --out; never modifies the PDF; fail-closed exit 2 on hash/bytes/encryption mismatch",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_media_pmap",
+      "path": "src/certpassly/phase1/make_pmap.py",
+      "test": "tests/test_phase1_safety.py",
+      "command": "python -m certpassly.phase1.make_pmap PRIVATE/source.pdf PRIVATE/out/media/src PRIVATE/pmap.json",
+      "dependencies": "Python >=3.11; pdf extra (PyMuPDF) + visual extra (Pillow, numpy)",
+      "side_effects": "writes one local pmap JSON; read-only on PDF and media dir",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_structured_builder",
+      "path": "src/certpassly/phase1/build_structured_v1.py",
+      "test": "tests/test_phase1_builder.py",
+      "command": "python -m certpassly.phase1.build_structured_v1 PRIVATE/config.json",
+      "dependencies": "Python >=3.11; pdf extra (PyMuPDF)",
+      "side_effects": "writes the private exams/<CODE>/structured/v1 tree (questions, pages, assets, indexes); never modifies source PDF/upstream",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_export_builder",
+      "path": "src/certpassly/phase1/build_exports.py",
+      "test": "tests/test_phase1_exports.py",
+      "command": "python -m certpassly.phase1.build_exports PRIVATE/config.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "writes export/upstream-extract-compatible and fail-closed export/site-format-v1-draft under the structured tree; no learner-facing content",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_source_manifest",
+      "path": "src/certpassly/phase1/make_source_manifest.py",
+      "test": "tests/test_phase1_reconcile.py",
+      "command": "python -m certpassly.phase1.make_source_manifest PRIVATE/config.json",
+      "dependencies": "Python >=3.11; pdf extra (PyMuPDF); git for blob provenance",
+      "side_effects": "writes structured/v1/source-manifest.json (read-only inventory of declared reference files)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_validator",
+      "path": "src/certpassly/phase1/validate_structured_v1.py",
+      "test": "tests/test_phase1_reconcile.py",
+      "command": "python -m certpassly.phase1.validate_structured_v1 PRIVATE/config.json [--no-report]",
+      "dependencies": "Python >=3.11; phase1 extra (jsonschema>=4.20)",
+      "side_effects": "writes/merges structured/v1/extraction-report.json; exit 0 only if every configured check passes",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_reconciler",
+      "path": "src/certpassly/phase1/reconcile.py",
+      "test": "tests/test_phase1_reconcile.py",
+      "command": "python -m certpassly.phase1.reconcile PRIVATE/config.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "writes structured/v1/reconciliation.json; exit 0 only if every check passes; stage-log/visual-draft claims are GENUINELY recomputed from the pinned upstream output files when config.reconcile_notes carries stage_log_claims/visual_draft_claims, and are informational notes OUTSIDE the passed-check denominator when only prose details exist (P0-2)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_visual_qa",
+      "path": "src/certpassly/phase1/visual_qa.py",
+      "test": "tests/test_phase1_safety.py",
+      "command": "python -m certpassly.phase1.visual_qa PRIVATE/config.json",
+      "dependencies": "Python >=3.11; pdf + visual extras (PyMuPDF, Pillow, numpy)",
+      "side_effects": "writes qa/page-renders, qa/contact-sheets and qa/visual-qa-report.json under the structured tree; machine checks only, not human review; exit 2 on MACHINE VISIBILITY FAILURE (not-visible placement or image-bearing page rendering blank), exit 0 otherwise; pending human semantic review is reported as such and never impersonated (P0-1)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_run_all",
+      "path": "src/certpassly/phase1/run_all.py",
+      "test": "tests/test_phase1_run_all.py",
+      "command": "certpassly phase1-extract --config PRIVATE/config.json --upstream-scripts DIR [--dry-run --resume --start-from STAGE --adversarial-base DIR]",
+      "dependencies": "Python >=3.11; stage-dependent extras; pinned external upstream checkout",
+      "side_effects": "runs the deterministic stage pipeline via local python -m subprocesses; writes stage outputs and run-checkpoint.json next to the config (including the verified source_fingerprint and stage-0 audit summary); --resume/--start-from are gated by a fail-closed source guard that re-verifies the source PDF SHA-256/bytes against the config pins and the checkpoint fingerprint before any stage may be skipped (guard refusal = exit 3, no stage run, checkpoint untouched)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "phase1_adversarial_suite",
+      "path": "src/certpassly/phase1/adversarial.py",
+      "test": "tests/test_phase1_safety.py",
+      "command": "python -m certpassly.phase1.adversarial --base SCRATCH --upstream PINNED/scripts [--report-out qa/adversarial-tests.json]",
+      "dependencies": "Python >=3.11; pdf + visual extras; Poppler pdftohtml + Tesseract; pinned external upstream checkout",
+      "side_effects": "builds synthetic PDFs in a scratch dir and runs the real pinned extractor + this package; optional local JSON report; no real exam data",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }
