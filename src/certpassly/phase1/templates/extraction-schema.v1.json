@@ -76,7 +76,8 @@
       "source_kind": {"enum": ["owner_typed_text", "answer_reference_image", "missing"]},
       "privacy": {"type": "string"},
       "answer_image_usages": {"type": "array", "items": {"$ref": "#/definitions/usage_id"}},
-      "selection_candidates_unapproved": {"type": "array", "items": {"type": "object", "required": ["source", "value", "approved"], "properties": {"source": {"type": "string"}, "value": {}, "approved": {"const": false}}}}
+      "selection_candidates_unapproved": {"type": "array", "items": {"type": "object", "required": ["source", "value", "approved"], "properties": {"source": {"type": "string"}, "value": {}, "approved": {"const": false}}}},
+      "editorial_overlay_candidates": {"type": "array", "items": {"type": "object", "required": ["provenance", "value", "approved"], "properties": {"provenance": {"const": "original_certpassly_team_editorial_not_owner_pdf"}, "value": {}, "approved": {"const": false}, "note": {"type": "string"}}}}
      }
     },
     "media_usages": {"type": "array", "items": {"$ref": "#/definitions/media_usage"}},

@@ -41,6 +41,13 @@ ANSWER_KIND_IMAGE = "answer_reference_image"
 ANSWER_KIND_BOTH = "typed_text_with_answer_image"
 ANSWER_KIND_MISSING = "missing"
 
+# P1-5 (director audit 2026-11-13): provenance marker used by prior manual
+# transcription drafts that are CertPassly-team EDITORIAL content, NOT owner
+# PDF transcriptions. Such drafts are never allowed into
+# answer.selection_candidates_unapproved; they live in the separate
+# answer.editorial_overlay_candidates field with this explicit provenance.
+EDITORIAL_PROVENANCE = "original_certpassly_team_editorial_not_owner_pdf"
+
 
 def build_schema(cfg):
     """Emit the structured/v1 JSON schema.
@@ -545,14 +552,26 @@ def main(cfg_path):
 
         # answer candidates (never promoted to keys)
         candidates = []
+        editorial_overlay = []
         vd = vd_by_q.get(q, {})
         if vd.get("key"):
             candidates.append(dict(source="pinned_upstream_analyze_visual_ocr_draft",
                                    value=vd["key"], approved=False))
         vt_rec = vt_by_q.get(q)
         if vt_rec and vt_rec.get("key") is not None:
-            candidates.append(dict(source="prior_manual_visual_transcription_draft",
-                                   value=vt_rec["key"], approved=False))
+            if vt_rec.get("source") == EDITORIAL_PROVENANCE:
+                # P1-5 (director audit 2026-11-13): a draft explicitly marked
+                # as CertPassly-team EDITORIAL content (not owner PDF) must
+                # NEVER appear as a PDF answer-transcription candidate. It is
+                # kept in a separate, explicitly-provenanced overlay field;
+                # selection_candidates_unapproved stays PDF-derived only.
+                editorial_overlay.append(dict(
+                    provenance=EDITORIAL_PROVENANCE,
+                    value=vt_rec["key"], approved=False,
+                    note=vt_rec.get("note", "")))
+            else:
+                candidates.append(dict(source="prior_manual_visual_transcription_draft",
+                                       value=vt_rec["key"], approved=False))
         sel = vsd_sel.get(q)
         if sel and sel.get("selected_text"):
             candidates.append(dict(source="prior_manual_screenshot_selection_draft",
@@ -566,6 +585,10 @@ def main(cfg_path):
             answer_image_usages=[u["usage_id"] for u in usages if u["role"] == "answer_reference"],
             selection_candidates_unapproved=candidates,
         )
+        if editorial_overlay:
+            # P1-5: separate overlay field, correct provenance, never mixed
+            # into the transcription candidates and never approved.
+            answer_rec["editorial_overlay_candidates"] = editorial_overlay
         if typed_key_status:
             # P0-A: the typed letter on an image-based question is a source
             # literal, never a trusted key/widget inference.

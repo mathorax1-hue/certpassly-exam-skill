@@ -95,10 +95,23 @@ class Result:
 
     def __init__(self):
         self.checks = []
+        # P0-2 (director audit 2026-11-13): informational notes are recorded
+        # separately and are NEVER part of the passed-check denominator; a
+        # note is explicitly "not tested", not a synthetic-true check.
+        self.notes = []
 
     def check(self, name, ok, detail=""):
         self.checks.append(dict(check=name, passed=bool(ok), detail=str(detail)[:300]))
         return bool(ok)
+
+    def note(self, name, detail=""):
+        """Record an informational item OUTSIDE the passed-check denominator.
+
+        Use for context that cannot be machine-verified against reproducible
+        evidence (e.g. a prose recollection of a pinned stage log). Notes have
+        no pass/fail semantics and must never be cited as passed checks.
+        """
+        self.notes.append(dict(note=name, detail=str(detail)[:300]))
 
     @property
     def failed(self):

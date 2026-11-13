@@ -202,9 +202,45 @@ def main(cfg_path):
             and by_class["question_content"] == exp.get("question_content_runs"),
             f"total={total_runs} {dict(by_class)}")
 
-    # 8. pinned stage-log reproduction (config notes carry the exact lines)
-    R.check("pinned_stage_log_line_reproduced", True, rn.get("stage_log_detail", ""))
-    R.check("visual_draft_reproduced", True, rn.get("visual_draft_detail", ""))
+    # 8. pinned stage-log / visual-draft reproduction — P0-2 (director audit
+    #    2026-11-13): these two used to be hardcoded-True checks that always
+    #    counted as passed. They are now GENUINE recomputation checks when the
+    #    config carries machine-verifiable claims (stage_log_claims /
+    #    visual_draft_claims): every claimed number is re-derived here from the
+    #    pinned upstream output files and must match exactly. When only prose
+    #    details exist (legacy configs) the fields become informational NOTES
+    #    recorded OUTSIDE the passed-check denominator - explicitly "not
+    #    tested", never cited as passed checks. Altered stage logs or visual
+    #    drafts make the recomputation mismatch and the check FAILS.
+    ex = f"{UP}/extracted"
+    stage_claims = rn.get("stage_log_claims")
+    if stage_claims:
+        stage_facts = dict(
+            items=len(orig_split),
+            image_keyed=sum(1 for r in orig_split.values() if r.get("answer_images")),
+            cleanups=len(P.jload(f"{ex}/cleanups.json", [])),
+            unparsed=len(P.jload(f"{ex}/unparsed.json", [])),
+            layout=P.jload(f"{ex}/layout.json", {}).get("profile"),
+        )
+        R.check("pinned_stage_log_claims_reproduced",
+                all(stage_facts.get(k) == v for k, v in stage_claims.items()),
+                f"recomputed from pinned upstream files: {stage_facts} vs claims {stage_claims}")
+    elif rn.get("stage_log_detail"):
+        R.note("pinned_stage_log_line_informational_not_tested",
+               f"{rn['stage_log_detail']} (prose only; no machine-verifiable claims - not tested)")
+    vd_claims = rn.get("visual_draft_claims")
+    if vd_claims:
+        vd_full = P.jload(f"{ex}/visual_draft.json", {})
+        kinds = Counter(v.get("kind") for v in vd_full.values())
+        vd_facts = dict(entries=len(vd_full),
+                        kinds={k: n for k, n in sorted(kinds.items()) if k is not None},
+                        with_notes=sum(1 for v in vd_full.values() if v.get("notes")))
+        R.check("visual_draft_claims_reproduced",
+                all(vd_facts.get(k) == v for k, v in vd_claims.items()),
+                f"recomputed from pinned visual_draft.json: {vd_facts} vs claims {vd_claims}")
+    elif rn.get("visual_draft_detail"):
+        R.note("visual_draft_informational_not_tested",
+               f"{rn['visual_draft_detail']} (prose only; no machine-verifiable claims - not tested)")
 
     failed = R.failed
     print(f"===== RECONCILIATION ({exam}): {len(R.checks) - len(failed)}/{len(R.checks)} checks passed =====")
@@ -244,6 +280,9 @@ def main(cfg_path):
         summary=summary,
         count_systems_explained=rn.get("count_systems_explained", []),
         checks=R.checks,
+        # P0-2: informational notes are OUTSIDE the passed-check denominator;
+        # they are explicitly "not tested", never passed checks.
+        informational_notes=R.notes,
         no_silent_drops_statement=rn.get("no_silent_drops_statement",
             "Every original PDF image reference, text run, typed answer and page is accounted for in "
             "structured/v1. Superseded material is retained with explicit status; nothing was deleted, "

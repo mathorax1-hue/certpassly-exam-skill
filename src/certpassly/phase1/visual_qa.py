@@ -3,6 +3,13 @@
 
 Usage: python -m certpassly.phase1.visual_qa <config.json>
 
+Exit codes (P0-1, director audit 2026-11-13): 0 = all machine visibility
+checks passed; 2 = MACHINE VISIBILITY FAILURE (an image placement that is
+not visible / unreadable / degenerate, or an image-bearing page that renders
+blank). Human semantic review of answer-reference images is a separate,
+pending HUMAN task - it is reported as such and never impersonated, and it
+never changes the exit code.
+
 Machine visual checks only; does NOT impersonate human review. Produces:
   - qa/page-renders/page-NNNN.jpg (private workspace; NOT committed - derivable)
   - qa/contact-sheet-*.jpg (committed small evidence)
@@ -142,6 +149,26 @@ def main(cfg_path):
     ocr_notes = {q: v.get("notes") for q, v in vd.items() if v.get("notes")}
     n_answer_refs = sum(1 for u in au["usages"] if u["role"] == "answer_reference")
 
+    # P0-1 (director audit 2026-11-13): machine visibility failures are FATAL.
+    # Failure classes (exit 2): an image placement that is not visible
+    # (low/failed crop-vs-asset correlation, unreadable asset, degenerate
+    # crop) and an image-bearing page that renders blank. Recorded warnings
+    # (never fatal by themselves): clipped-at-page-edge placements (can be
+    # source-genuine), text-sparse pages carrying only short text runs, and
+    # truly blank pages with no assigned content. Human semantic review of
+    # answer-reference images is reported separately and is NEVER a machine
+    # pass/fail - it stays pending until a qualified human performs it.
+    machine_vis_failures = []
+    for v in low_vis:
+        machine_vis_failures.append(dict(page=v.get("page"), usage_id=v.get("usage_id"),
+                                         check=v.get("check"), result=v.get("result"),
+                                         failure_class="image_placement_not_visible"))
+    render_blank_with_images = [s["page"] for s in page_stats
+                                if s["nonwhite_ratio"] < 0.005 and usage_by_page.get(s["page"])]
+    for p in render_blank_with_images:
+        machine_vis_failures.append(dict(page=p,
+                                         failure_class="page_renders_blank_with_image_usages"))
+
     report = dict(
         schema_version="structured-v1",
         exam_code=cfg["exam_code"],
@@ -158,13 +185,31 @@ def main(cfg_path):
                               clipped_at_page_edge=clipped,
                               min_correlation=min(corr) if corr else None,
                               median_correlation=round(float(np.median(corr)), 4) if corr else None),
+        machine_visibility=dict(
+            failed=bool(machine_vis_failures),
+            failure_class="machine_visibility_failure",
+            failures=machine_vis_failures,
+            exit_code=2 if machine_vis_failures else 0,
+            fatal_policy=("P0-1 (director audit 2026-11-13): not-visible image placements and "
+                          "image-bearing pages that render blank are machine visibility "
+                          "FAILURES (exit 2). Clipped-at-edge placements, text-sparse pages and "
+                          "content-free blank pages are recorded warnings only. Human semantic "
+                          "review of answer-reference images is a separate pending human task "
+                          "and never impersonated by this tool.")),
         ocr_readability_flags=dict(pinned_analyze_visual_notes=ocr_notes,
                                    count_with_notes=len(ocr_notes)),
         contact_sheets=sheets,
-        conclusion=(f"All pages render non-blank and all placed images correlate with their source "
-                    f"binaries; machine extraction counts do not prove semantic readability of "
-                    f"diagrams/checkboxes/answer selections. Human visual review remains required "
-                    f"for the {n_answer_refs} answer-reference images and disputed items."),
+        conclusion=(
+            (f"MACHINE VISIBILITY FAILURE: {len(machine_vis_failures)} item(s) failed the required "
+             f"visibility/placement checks (see machine_visibility.failures); extraction cannot be "
+             f"accepted as visually intact until the failures are resolved. ")
+            if machine_vis_failures else
+            (f"All pages render non-blank and all placed images correlate with their source "
+             f"binaries; ")
+        ) + (f"machine extraction counts do not prove semantic readability of "
+             f"diagrams/checkboxes/answer selections. Human visual review remains required "
+             f"for the {n_answer_refs} answer-reference images and disputed items "
+             f"(human_review_pending; never impersonated by this machine tool)."),
     )
     P.jdump(report, f"{QA}/visual-qa-report.json")
     print("\nblank pages:", blank_pages, "| text-sparse (not blank):", text_sparse)
@@ -173,7 +218,14 @@ def main(cfg_path):
           "min corr:", report["image_visibility"]["min_correlation"],
           "median:", report["image_visibility"]["median_correlation"])
     print("not visible:", report["image_visibility"]["not_visible"][:10])
-    return 0 if not low_vis else 0  # report-only tool; visibility failures are recorded, not fatal
+    if machine_vis_failures:
+        print(f"MACHINE VISIBILITY FAILURE: {len(machine_vis_failures)} item(s) -> exit 2")
+        return 2
+    # P0-1 (director audit 2026-11-13): this tool used to return 0 even when
+    # placements were not visible. Machine visibility failures now exit 2 so
+    # run_all stops; pending HUMAN semantic review is reported as such and is
+    # deliberately NOT an exit-code condition.
+    return 0
 
 
 if __name__ == "__main__":

@@ -247,7 +247,7 @@
       "test": "tests/test_phase1_reconcile.py",
       "command": "python -m certpassly.phase1.reconcile PRIVATE/config.json",
       "dependencies": "Python >=3.11 standard library only",
-      "side_effects": "writes structured/v1/reconciliation.json; exit 0 only if every check passes",
+      "side_effects": "writes structured/v1/reconciliation.json; exit 0 only if every check passes; stage-log/visual-draft claims are GENUINELY recomputed from the pinned upstream output files when config.reconcile_notes carries stage_log_claims/visual_draft_claims, and are informational notes OUTSIDE the passed-check denominator when only prose details exist (P0-2)",
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
@@ -258,7 +258,7 @@
       "test": "tests/test_phase1_safety.py",
       "command": "python -m certpassly.phase1.visual_qa PRIVATE/config.json",
       "dependencies": "Python >=3.11; pdf + visual extras (PyMuPDF, Pillow, numpy)",
-      "side_effects": "writes qa/page-renders, qa/contact-sheets and qa/visual-qa-report.json under the structured tree; machine checks only, not human review",
+      "side_effects": "writes qa/page-renders, qa/contact-sheets and qa/visual-qa-report.json under the structured tree; machine checks only, not human review; exit 2 on MACHINE VISIBILITY FAILURE (not-visible placement or image-bearing page rendering blank), exit 0 otherwise; pending human semantic review is reported as such and never impersonated (P0-1)",
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false

@@ -97,6 +97,66 @@ class ValidatorGateTests(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertFalse(checks.get("answer_index_kinds", True))
 
+    def test_pdf_sha_mismatch_fails_closed(self):
+        """P0-3 (director audit 2026-11-13): a source PDF whose bytes no longer
+        match the recorded manifest hash must FAIL the readback check (stale
+        cache / tampered source), never report a source-integrity pass."""
+        with open(self.pdf, "ab") as f:
+            f.write(b"tampered-trailer-bytes")
+        rc, checks = self._checks()
+        self.assertNotEqual(rc, 0)
+        self.assertIs(checks.get("pdf_sha256_readback"), False)
+        self.assertIs(checks.get("pdf_bytes_readback"), False)
+
+    def test_editorial_crossed_provenance_fails(self):
+        """P1-5 (director audit 2026-11-13): an editorial overlay value that
+        ALSO appears in the PDF answer-transcription candidates is crossed
+        provenance (the AB-900 q002 defect shape) and must FAIL validation."""
+        v1 = os.path.join(self.root, "structured", "v1")
+        qp = f"{v1}/questions/q002.json"
+        q = P.jload(qp)
+        val = ["editorial", "replacement", "key"]
+        q["answer"]["editorial_overlay_candidates"] = [
+            dict(provenance="original_certpassly_team_editorial_not_owner_pdf",
+                 value=val, approved=False, note="synthetic editorial draft")]
+        q["answer"]["selection_candidates_unapproved"].append(
+            dict(source="prior_manual_visual_transcription_draft", value=val, approved=False))
+        P.jdump(q, qp)
+        rc, checks = self._checks()
+        self.assertNotEqual(rc, 0)
+        self.assertIs(checks.get("editorial_overlay_never_a_transcription_candidate"), False)
+
+    def test_editorial_overlay_provenance_required(self):
+        """P1-5: editorial overlay entries must carry the explicit editorial
+        provenance marker and stay unapproved; anything else fails closed."""
+        v1 = os.path.join(self.root, "structured", "v1")
+        qp = f"{v1}/questions/q002.json"
+        q = P.jload(qp)
+        q["answer"]["editorial_overlay_candidates"] = [
+            dict(provenance="unmarked_source", value=["x"], approved=False)]
+        P.jdump(q, qp)
+        rc, checks = self._checks()
+        self.assertNotEqual(rc, 0)
+        self.assertIs(checks.get("editorial_overlay_provenance_explicit_and_unapproved"), False)
+
+    def test_editorial_overlay_wellformed_passes(self):
+        """P1-5 control: a correctly separated editorial overlay candidate
+        (explicit provenance, unapproved, absent from transcription candidates)
+        passes the new gates on the honest fixture."""
+        v1 = os.path.join(self.root, "structured", "v1")
+        qp = f"{v1}/questions/q002.json"
+        q = P.jload(qp)
+        q["answer"]["editorial_overlay_candidates"] = [
+            dict(provenance="original_certpassly_team_editorial_not_owner_pdf",
+                 value=["separate", "editorial", "value"], approved=False,
+                 note="synthetic editorial draft, separate layer")]
+        P.jdump(q, qp)
+        rc, checks = self._checks()
+        self.assertEqual(rc, 0, f"unexpected failures: "
+                         f"{[k for k, v in checks.items() if not v]}")
+        self.assertIs(checks.get("editorial_overlay_never_a_transcription_candidate"), True)
+        self.assertIs(checks.get("editorial_overlay_provenance_explicit_and_unapproved"), True)
+
 
 if __name__ == "__main__":
     unittest.main()

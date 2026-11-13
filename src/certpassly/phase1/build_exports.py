@@ -133,6 +133,13 @@ def main(cfg_path):
                            "key status unknown, requires visual/per-row review")
         if r["answer"]["selection_candidates_unapproved"]:
             reasons.append("cannot_export_key: machine/manual candidates are explicitly unapproved")
+        if r["answer"].get("editorial_overlay_candidates"):
+            # P1-5 (director audit 2026-11-13): an editorial overlay candidate
+            # exists but is explicitly NOT owner-PDF content; it can never be
+            # exported as an answer and is kept in a separate provenance layer.
+            reasons.append("cannot_export_key: editorial overlay candidate present "
+                           "(original_certpassly_team_editorial_not_owner_pdf, separate layer; "
+                           "never a PDF transcription)")
         if r["options"]["mode"] == "in_question_image":
             reasons.append("cannot_export_options: option list lives inside the question image; requires approved visual transcription")
         if r["question_type"]["site_format_type"] == "unknown":

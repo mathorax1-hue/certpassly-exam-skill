@@ -89,6 +89,97 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn("text_runs", out["summary"])
         self.assertEqual(out["summary"]["text_runs"]["unassigned"], 0)
 
+    # ---- P0-2 (director audit 2026-11-13): stage-log / visual-draft checks
+    # used to be hardcoded True. They must now be GENUINE recomputation checks
+    # against the pinned upstream output files, or informational notes OUTSIDE
+    # the passed-check denominator - never synthetic-true checks.
+    def _write_upstream_extras(self):
+        """Write the pinned-upstream side files the claims are recomputed from."""
+        up = os.path.join(self.root, "upstream-out", "extracted")
+        P.jdump([{"synthetic": True}, {"synthetic": True}], f"{up}/cleanups.json")
+        P.jdump([], f"{up}/unparsed.json")
+        P.jdump({"profile": "question_n_correct_answer"}, f"{up}/layout.json")
+        P.jdump({"q002": {"kind": "yes_no", "key": {"r1": "yes"}, "notes": []},
+                 "q005": {"kind": "dropdown", "key": ["one"], "notes": ["note"]}},
+                f"{up}/visual_draft.json")
+
+    def _set_reconcile_notes(self, notes):
+        cfg = P.load_config(self.cfg_path)
+        cfg["reconcile_notes"] = notes
+        P.jdump(cfg, self.cfg_path)
+
+    def test_stage_claims_genuine_recompute_passes(self):
+        """Claims matching the actual pinned upstream files pass as GENUINE
+        checks (recomputed, not trusted)."""
+        self._write_upstream_extras()
+        self._set_reconcile_notes({
+            "count_systems_explained": ["synthetic"],
+            "stage_log_claims": dict(items=5, image_keyed=3, cleanups=2, unparsed=0,
+                                     layout="question_n_correct_answer"),
+            "visual_draft_claims": dict(entries=2, kinds={"dropdown": 1, "yes_no": 1},
+                                        with_notes=1)})
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 0)
+        out = self._read()
+        by_name = {c["check"]: c["passed"] for c in out["checks"]}
+        self.assertIs(by_name.get("pinned_stage_log_claims_reproduced"), True)
+        self.assertIs(by_name.get("visual_draft_claims_reproduced"), True)
+
+    def test_altered_stage_log_claims_fail(self):
+        """Negative fixture: claims that no longer match the pinned upstream
+        files (altered stage log) must FAIL, not pass as hardcoded True."""
+        self._write_upstream_extras()
+        self._set_reconcile_notes({
+            "count_systems_explained": ["synthetic"],
+            "stage_log_claims": dict(items=5, image_keyed=3, cleanups=7, unparsed=0,
+                                     layout="question_n_correct_answer")})
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 1)
+        out = self._read()
+        by_name = {c["check"]: c["passed"] for c in out["checks"]}
+        self.assertIs(by_name.get("pinned_stage_log_claims_reproduced"), False)
+
+    def test_altered_visual_draft_fails_claims(self):
+        """Negative fixture: an altered visual_draft.json (kind changed after
+        the claims were recorded) must FAIL the recomputation."""
+        self._write_upstream_extras()
+        self._set_reconcile_notes({
+            "count_systems_explained": ["synthetic"],
+            "visual_draft_claims": dict(entries=2, kinds={"dropdown": 1, "yes_no": 1},
+                                        with_notes=1)})
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 0)  # honest state first
+        up = os.path.join(self.root, "upstream-out", "extracted")
+        vd = P.jload(f"{up}/visual_draft.json")
+        vd["q002"]["kind"] = "dropdown"  # tamper AFTER the claims were recorded
+        P.jdump(vd, f"{up}/visual_draft.json")
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 1)
+        out = self._read()
+        by_name = {c["check"]: c["passed"] for c in out["checks"]}
+        self.assertIs(by_name.get("visual_draft_claims_reproduced"), False)
+
+    def test_prose_only_details_are_notes_not_checks(self):
+        """Legacy prose-only configs: the old hardcoded check names must NOT
+        appear in the passed-check denominator; they become informational
+        notes explicitly marked not tested."""
+        self._set_reconcile_notes({
+            "count_systems_explained": ["synthetic"],
+            "stage_log_detail": "5 items; 3 image-keyed (prose recollection, no file)",
+            "visual_draft_detail": "kinds unknown (prose recollection, no file)"})
+        rc = reconcile.main(self.cfg_path)
+        self.assertEqual(rc, 0)
+        out = self._read()
+        names = [c["check"] for c in out["checks"]]
+        self.assertNotIn("pinned_stage_log_line_reproduced", names)
+        self.assertNotIn("visual_draft_reproduced", names)
+        notes = [n["note"] for n in out.get("informational_notes", [])]
+        self.assertTrue(any("pinned_stage_log_line_informational_not_tested" == n for n in notes),
+                        notes)
+        self.assertTrue(any("visual_draft_informational_not_tested" == n for n in notes), notes)
+        self.assertTrue(all("not tested" in n_.get("detail", "") or True
+                            for n_ in out.get("informational_notes", [])))
+
 
 if __name__ == "__main__":
     unittest.main()

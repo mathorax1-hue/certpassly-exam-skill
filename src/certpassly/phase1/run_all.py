@@ -6,8 +6,9 @@ Usage: python -m certpassly.phase1.run_all --config <config.json>
                   [--adversarial-base <scratch>] [--skip-adversarial]
                   [--dry-run] [--resume] [--start-from <stage>]
 
-Runs, in order: build_structured_v1, build_exports, make_source_manifest,
-validate_structured_v1, reconcile, visual_qa, adversarial (optional).
+Runs, in order: audit_source (stage 0, P0-C hard gate), build_structured_v1,
+build_exports, make_source_manifest, validate_structured_v1, reconcile,
+visual_qa, adversarial (optional).
 
 Behavior:
   - deterministic: every stage is idempotent; re-running the whole sequence with
@@ -18,7 +19,9 @@ Behavior:
     stage; resume at the first incomplete/failed stage otherwise;
   - --start-from <stage>: begin at a named stage (stage names as listed above);
   - --dry-run: print the planned stage commands without executing anything;
-  - stops at the first non-zero stage and records it in the checkpoint;
+  - stops at the first non-zero stage and records it in the checkpoint
+    (audit BLOCK exit 2, validation/reconciliation failures exit 1, and -
+    since the P0-1 correction - visual_qa MACHINE VISIBILITY FAILURE exit 2);
   - writes a per-stage checkpoint log next to the config (run-checkpoint.json).
 
 Stages run via ``python -m certpassly.phase1.<stage>`` so the installed (or

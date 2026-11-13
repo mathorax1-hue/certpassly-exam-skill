@@ -7,7 +7,7 @@ Each scenario builds a SYNTHETIC PDF, runs the REAL pinned upstream extractor
 correct handling OR an explicit, safe failure (FAIL/BLOCKED with reason). No
 test data comes from any real exam PDF.
 
-31 scenarios = the 17 ZAI-EXTRACT-001 pilot scenarios (ported unchanged in
+34 scenarios = the 17 ZAI-EXTRACT-001 pilot scenarios (ported unchanged in
 substance) + 10 ZAI-EXTRACT-002 scenarios (missing image binary, duplicate
 question ids with gap, rotated 270 pages, text insertion order, vector-only
 diagrams, multiple choices in answer screenshots, duplicate xref on three
@@ -15,7 +15,9 @@ pages, malformed MIME image streams, non-embedded fonts, exact answer-image
 privacy through the export layer) + 4 director-audit P0 scenarios
 (typed-letter + dropdown image, typed-letter + three-row Yes/No matrix,
 legitimate text-only single choice control, typed placeholder + ambiguous
-image fail-closed).
+image fail-closed) + 3 director-audit-2 scenarios (visual_qa
+machine-visibility exit codes, editorial overlay provenance separation,
+stage-log/visual-draft claim tamper).
 
 Usage: python -m certpassly.phase1.adversarial --base <scratch-dir>
           --upstream <pinned-scripts-dir> [--engine <dir>]
@@ -1079,6 +1081,254 @@ def scenario_typed_letter_ambiguous_image():
     report("typed_placeholder_with_ambiguous_image_fails_closed", ok, detail)
 
 
+# ---------------- director-audit-2 scenarios (P0-1 / P0-2 / P1-5) ----------------
+
+def _derive_expected(out_dir):
+    """Measure the built tree and derive the config.expected block (measure,
+    then check - never trust a pre-declared count)."""
+    from collections import Counter as _C
+    qfiles = sorted(f for f in os.listdir(f"{out_dir}/questions") if f.endswith(".json"))
+    pfiles = sorted(f for f in os.listdir(f"{out_dir}/pages") if f.endswith(".json"))
+    au = jload(f"{out_dir}/asset-usage.json")
+    roles = _C(u["role"] for u in au["usages"])
+    sup = _C(u.get("active_packaged_media_status", "active") for u in au["usages"])
+    kinds, types, overlay_c, runs = _C(), _C(), _C(), _C()
+    for f in qfiles:
+        q = jload(f"{out_dir}/questions/{f}")
+        kinds[q["answer"]["source_kind"]] += 1
+        types[q["question_type"]["site_format_type"]] += 1
+        overlay_c[q["editorial_overlay_status"]] += 1
+    for f in pfiles:
+        p = jload(f"{out_dir}/pages/{f}")
+        for r_ in p["text_runs"]:
+            runs[r_["classification"]] += 1
+    unres = jload(f"{out_dir}/unresolved.json")
+    return dict(
+        questions=len(qfiles), pages=len(pfiles),
+        assets=len([f for f in os.listdir(f"{out_dir}/assets") if not f.startswith(".")]),
+        usages=len(au["usages"]), roles={k: v for k, v in roles.items() if v},
+        packaged_status={k: v for k, v in sup.items() if v},
+        answer_kinds=dict(kinds), unknown_types=types.get("unknown", 0),
+        overlay=dict(overlay_c),
+        cover_marketing_runs=runs.get("cover_or_marketing_before_first_question", 0),
+        question_content_runs=runs.get("question_content", 0),
+        archived_matches=0, unresolved_min=max(0, unres.get("count", 0)),
+    )
+
+
+def _patch_config(cfgp, **sections):
+    cfg = jload(cfgp)
+    for k, v in sections.items():
+        if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            cfg[k].update(v)
+        else:
+            cfg[k] = v
+    json.dump(cfg, open(cfgp, "w"))
+    return cfg
+
+
+def _visual_qa_cmd(cfgp):
+    return subprocess.run(_engine_cmd("visual_qa") + [cfgp],
+                          capture_output=True, text=True)
+
+
+def scenario_visual_qa_exit_codes():
+    """P0-1: visual_qa must exit 0 when every placement is visible and exit 2
+    (MACHINE VISIBILITY FAILURE) when a placed asset no longer correlates -
+    the old build always returned 0 and run_all could never stop on it."""
+    qimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.text((15, 85), "weekly", fill="black")))
+    aimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.ellipse([12, 55, 90, 75], outline="red", width=3),
+        d.text((15, 85), "weekly", fill="black")))
+    pdf = _typed_letter_visual_pdf(A.base, "vqa_exit", qimg, aimg,
+                                   "HOTSPOT - Select the answer that correctly completes the sentence.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-VQA")
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-VQA", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        rv0 = _visual_qa_cmd(cfgp)
+        rep0 = jload(f"{out_dir}/qa/visual-qa-report.json")
+        # tamper: replace one placed asset binary with noise so the crop vs
+        # asset correlation collapses (simulates a broken/missing asset)
+        assets = sorted(os.listdir(f"{out_dir}/assets"))
+        noise = png_bytes(300, 120, lambda d: d.line([(0, 0), (299, 119)], fill="blue", width=9))
+        with open(f"{out_dir}/assets/{assets[0]}", "wb") as f:
+            f.write(noise)
+        rv2 = _visual_qa_cmd(cfgp)
+        rep2 = jload(f"{out_dir}/qa/visual-qa-report.json")
+        ok = (rv0.returncode == 0 and rep0["machine_visibility"]["failed"] is False
+              and rv2.returncode == 2 and rep2["machine_visibility"]["failed"] is True
+              and rep2["machine_visibility"]["failures"]
+              and all(f_["failure_class"] == "image_placement_not_visible"
+                      for f_ in rep2["machine_visibility"]["failures"]))
+        detail += (f"; clean exit {rv0.returncode} (failed={rep0['machine_visibility']['failed']}); "
+                   f"tampered exit {rv2.returncode} (failed={rep2['machine_visibility']['failed']}, "
+                   f"{len(rep2['machine_visibility']['failures'])} failure(s))")
+    report("visual_qa_machine_visibility_exit_codes", ok, detail)
+
+
+def scenario_editorial_overlay_separation():
+    """P1-5: a prior transcription draft explicitly marked as CertPassly-team
+    EDITORIAL content must land in answer.editorial_overlay_candidates with
+    explicit provenance - NEVER in selection_candidates_unapproved (the AB-900
+    q002 crossed-provenance defect) - and crossed provenance must fail the
+    validator."""
+    qimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "alpha", fill="black"),
+        d.text((15, 85), "beta", fill="black")))
+    aimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "alpha", fill="black"),
+        d.ellipse([12, 55, 90, 75], outline="red", width=3),
+        d.text((15, 85), "beta", fill="black")))
+    pdf = _typed_letter_visual_pdf(A.base, "editorial_overlay", qimg, aimg,
+                                   "HOTSPOT - Select the answer that correctly completes the sentence.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-EDO")
+    subprocess.run([sys.executable, f"{A.upstream}/analyze_visual.py", out],
+                   capture_output=True, text=True)
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-EDO", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        # editorial evidence: a prior draft EXPLICITLY marked as team editorial
+        # content, not an owner-PDF transcription
+        edo_val = ["editorial-row-1", "editorial-row-2"]
+        vt_dir = f"{A.base}/fake-repo/exams/SYN-EDO"
+        os.makedirs(vt_dir, exist_ok=True)
+        json.dump({"q001": {"key": edo_val,
+                            "source": "original_certpassly_team_editorial_not_owner_pdf",
+                            "note": "This is NOT a transcription of owner PDF."}},
+                  open(f"{vt_dir}/visual_transcription.json", "w"))
+        _patch_config(cfgp,
+                      schema={"source_kind_extension": ["typed_text_with_answer_image"]},
+                      evidence={"visual_transcription": "exams/SYN-EDO/visual_transcription.json"},
+                      manifest={"pdf_repo_path": f"{pdf}", "extract_log_line": "synthetic adversarial",
+                                "inventory": [], "immutability_untouched": [], "immutability_added": []})
+        rb2 = subprocess.run(_engine_cmd("build_structured_v1") + [cfgp],
+                             capture_output=True, text=True)
+        rm = subprocess.run(_engine_cmd("make_source_manifest") + [cfgp],
+                            capture_output=True, text=True)
+        ok = rb2.returncode == 0 and rm.returncode == 0
+        detail += f"; rebuild exit {rb2.returncode}; manifest exit {rm.returncode}"
+        if ok:
+            q1 = jload(f"{out_dir}/questions/q001.json")
+            ed = q1["answer"].get("editorial_overlay_candidates") or []
+            cands = q1["answer"]["selection_candidates_unapproved"]
+            separated = (len(ed) == 1
+                         and ed[0]["provenance"] == "original_certpassly_team_editorial_not_owner_pdf"
+                         and ed[0]["approved"] is False
+                         and edo_val not in [c.get("value") for c in cands])
+            re_ = run_exports(cfgp)
+            blockers = jload(f"{out_dir}/export/site-format-v1-draft/export-blockers.json")
+            reasons = blockers["items"][0]["cannot_export_without_review"] if blockers["items"] else []
+            ed_reason = any("editorial overlay candidate present" in x for x in reasons)
+            # validator integration on the honest separated record
+            _patch_config(cfgp, expected=_derive_expected(out_dir))
+            rv = subprocess.run(_engine_cmd("validate_structured_v1") + [cfgp],
+                                capture_output=True, text=True)
+            # crossed provenance (hand-corrupted) must FAIL the validator
+            q1["answer"]["selection_candidates_unapproved"].append(
+                dict(source="prior_manual_visual_transcription_draft", value=edo_val, approved=False))
+            json.dump(q1, open(f"{out_dir}/questions/q001.json", "w"))
+            rvx = subprocess.run(_engine_cmd("validate_structured_v1") + [cfgp],
+                                 capture_output=True, text=True)
+            ok = (separated and re_.returncode == 0 and ed_reason
+                  and rv.returncode == 0 and rvx.returncode != 0)
+            detail += (f"; separated={separated}; editorial_blocker_reason={ed_reason}; "
+                       f"validator_honest_exit={rv.returncode}; "
+                       f"validator_crossed_exit={rvx.returncode}")
+    report("editorial_overlay_never_a_transcription_candidate", ok, detail)
+
+
+def scenario_reconcile_claims_tamper():
+    """P0-2: stage-log / visual-draft claims are GENUINE recomputation checks:
+    they pass when they match the pinned upstream output files and FAIL when
+    the stage log or the visual draft is altered (negative fixtures)."""
+    qimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.text((15, 85), "weekly", fill="black")))
+    aimg = png_bytes(300, 120, lambda d: (
+        d.rectangle([5, 5, 295, 115], outline="black"),
+        d.text((15, 30), "Answer Area", fill="black"),
+        d.text((15, 60), "daily", fill="black"),
+        d.ellipse([12, 55, 90, 75], outline="red", width=3),
+        d.text((15, 85), "weekly", fill="black")))
+    pdf = _typed_letter_visual_pdf(A.base, "reconcile_claims", qimg, aimg,
+                                   "HOTSPOT - Select the answer that correctly completes the sentence.")
+    sha = hashlib.sha256(open(pdf, 'rb').read()).hexdigest()
+    r, out = run_pinned(pdf, "SYN-RCN")
+    subprocess.run([sys.executable, f"{A.upstream}/analyze_visual.py", out],
+                   capture_output=True, text=True)
+    rb, out_dir, cfgp = run_builder(pdf, "SYN-RCN", sha)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        from collections import Counter as _C
+        ex = f"{out}/extracted"
+        split = jload(f"{ex}/split.json")
+        vd = jload(f"{ex}/visual_draft.json")
+        kinds = _C(v.get("kind") for v in vd.values())
+        claims = dict(
+            stage_log_claims=dict(items=len(split),
+                                  image_keyed=sum(1 for v in split.values() if v.get("answer_images")),
+                                  cleanups=len(jload(f"{ex}/cleanups.json")) if os.path.exists(f"{ex}/cleanups.json") else 0,
+                                  unparsed=len(jload(f"{ex}/unparsed.json")) if os.path.exists(f"{ex}/unparsed.json") else 0,
+                                  layout=jload(f"{ex}/layout.json").get("profile")),
+            visual_draft_claims=dict(entries=len(vd),
+                                     kinds={k: n for k, n in sorted(kinds.items()) if k},
+                                     with_notes=sum(1 for v in vd.values() if v.get("notes"))),
+        )
+        _patch_config(cfgp, expected=_derive_expected(out_dir),
+                      manifest={"pdf_repo_path": f"{pdf}", "extract_log_line": "synthetic adversarial",
+                                "inventory": [], "immutability_untouched": [], "immutability_added": []},
+                      reconcile_notes={"count_systems_explained": ["synthetic"], **claims})
+        rm = subprocess.run(_engine_cmd("make_source_manifest") + [cfgp],
+                            capture_output=True, text=True)
+        rr0 = subprocess.run(_engine_cmd("reconcile") + [cfgp],
+                             capture_output=True, text=True)
+        rec0 = jload(f"{out_dir}/reconciliation.json")
+        by0 = {c["check"]: c["passed"] for c in rec0["checks"]}
+        # tamper both evidence sources: append a bogus cleanup entry and flip a
+        # visual-draft kind - the recomputation must now FAIL both checks
+        cl = jload(f"{ex}/cleanups.json") if os.path.exists(f"{ex}/cleanups.json") else []
+        cl.append({"bogus": "cleanup"})
+        json.dump(cl, open(f"{ex}/cleanups.json", "w"))
+        if vd:
+            k0 = sorted(vd)[0]
+            vd[k0]["kind"] = "flipped_by_tamper"
+            json.dump(vd, open(f"{ex}/visual_draft.json", "w"))
+        rr1 = subprocess.run(_engine_cmd("reconcile") + [cfgp],
+                             capture_output=True, text=True)
+        rec1 = jload(f"{out_dir}/reconciliation.json")
+        by1 = {c["check"]: c["passed"] for c in rec1["checks"]}
+        ok = (rm.returncode == 0 and rr0.returncode == 0
+              and by0.get("pinned_stage_log_claims_reproduced") is True
+              and by0.get("visual_draft_claims_reproduced") is True
+              and rr1.returncode == 1
+              and by1.get("pinned_stage_log_claims_reproduced") is False
+              and by1.get("visual_draft_claims_reproduced") is False)
+        detail += (f"; honest exit {rr0.returncode} (stage={by0.get('pinned_stage_log_claims_reproduced')}, "
+                   f"vd={by0.get('visual_draft_claims_reproduced')}); tampered exit {rr1.returncode} "
+                   f"(stage={by1.get('pinned_stage_log_claims_reproduced')}, "
+                   f"vd={by1.get('visual_draft_claims_reproduced')})")
+    report("reconcile_stage_log_and_visual_draft_claims_tamper_fails", ok, detail)
+
+
 def main():
     global A
     ap = argparse.ArgumentParser()
@@ -1132,10 +1382,14 @@ def main():
     scenario_typed_letter_yes_no_matrix()
     scenario_legitimate_text_single_choice()
     scenario_typed_letter_ambiguous_image()
+    # --- new director-audit-2 scenarios (P0-1 / P0-2 / P1-5) ---
+    scenario_visual_qa_exit_codes()
+    scenario_editorial_overlay_separation()
+    scenario_reconcile_claims_tamper()
 
     passed = sum(1 for r_ in results if r_["passed"])
     print(f"\n===== ADVERSARIAL SUITE: {passed}/{len(results)} scenarios passed =====")
-    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0)",
+    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2)",
                date=A.date,
                synthetic_only=True,
                real_exam_data_used=False,

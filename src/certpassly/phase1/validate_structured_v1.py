@@ -9,7 +9,7 @@ is hardcoded. Exit code 0 only if every check passes. Writes/merges
 extraction-report.json unless --no-report.
 """
 from __future__ import annotations
-import os, re, sys
+import json, os, re, sys
 from collections import Counter
 
 from . import p1common as P
@@ -120,6 +120,27 @@ def main(cfg_path, write_report=True):
     R.check(f"overlay_{_oa}_active_{_os}_superseded",
             all(overlay.get(k) == v for k, v in exp.get("overlay", {}).items())
             and sum(overlay.values()) == n_q, dict(overlay))
+
+    # P1-5 (director audit 2026-11-13): editorial overlay candidates must stay
+    # OUT of the PDF answer-transcription candidates, carry the explicit
+    # editorial provenance, and never be approved. Crossed provenance (the
+    # same value appearing in both fields) is a validation FAILURE - this is
+    # the regression for the AB-900 q002 defect the director identified.
+    EDITORIAL_PROVENANCE = "original_certpassly_team_editorial_not_owner_pdf"
+    ed_crossed, ed_bad_prov = [], []
+    for q, qr_ in qs.items():
+        ans = qr_["answer"]
+        cand_vals = {json.dumps(c.get("value"), sort_keys=True)
+                     for c in ans.get("selection_candidates_unapproved", [])}
+        for e in ans.get("editorial_overlay_candidates", []):
+            if json.dumps(e.get("value"), sort_keys=True) in cand_vals:
+                ed_crossed.append(q)
+            if (e.get("provenance") != EDITORIAL_PROVENANCE or e.get("approved") is not False):
+                ed_bad_prov.append(q)
+    R.check("editorial_overlay_never_a_transcription_candidate",
+            not ed_crossed, f"crossed provenance at {ed_crossed[:5]}")
+    R.check("editorial_overlay_provenance_explicit_and_unapproved",
+            not ed_bad_prov, f"bad provenance/approval at {ed_bad_prov[:5]}")
 
     bad_assets = []
     for q, qr_ in qs.items():

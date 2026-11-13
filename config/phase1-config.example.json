@@ -1,58 +1,136 @@
 {
-  "schema_version": "structured-v1",
-  "exam_code": "EXAMPLE-EXAM",
-  "generated_by": {"worker": "<worker id>", "date": "YYYY-MM-DD", "environment": "local worker sandbox (no GitHub Actions)"},
-  "provenance": {
-    "toolkit_label": "the config-driven certpassly.phase1 extraction toolkit (certpassly-exam-skill, candidate commit <full-sha>)",
-    "commands_reference": "docs/PHASE1-EXTRACTION.md in mathorax1-hue/certpassly-exam-skill",
-    "builder_script": "certpassly.phase1.build_structured_v1 (certpassly-exam-skill @ <full-sha>)",
-    "audit_tool": "certpassly.phase1.audit_source (certpassly-exam-skill @ <full-sha>)",
-    "exports_regeneration_command": "python -m certpassly.phase1.build_exports <config.json> (certpassly-exam-skill @ <full-sha>)"
+ "schema_version": "structured-v1",
+ "exam_code": "EXAMPLE-EXAM",
+ "generated_by": {
+  "worker": "<worker id>",
+  "date": "YYYY-MM-DD",
+  "environment": "local worker sandbox (no GitHub Actions)"
+ },
+ "provenance": {
+  "toolkit_label": "the config-driven certpassly.phase1 extraction toolkit (certpassly-exam-skill, candidate commit <full-sha>)",
+  "commands_reference": "docs/PHASE1-EXTRACTION.md in mathorax1-hue/certpassly-exam-skill",
+  "builder_script": "certpassly.phase1.build_structured_v1 (certpassly-exam-skill @ <full-sha>)",
+  "audit_tool": "certpassly.phase1.audit_source (certpassly-exam-skill @ <full-sha>)",
+  "exports_regeneration_command": "python -m certpassly.phase1.build_exports <config.json> (certpassly-exam-skill @ <full-sha>)"
+ },
+ "paths": {
+  "pdf": "/abs/path/to/private-workspace/owner-files/EXAMPLE-EXAM/source.pdf",
+  "repo": "/abs/path/to/private-exam-repository-worktree",
+  "out_dir": "/abs/path/to/private-exam-repository-worktree/exams/EXAMPLE-EXAM/structured/v1",
+  "upstream_out": "/abs/path/to/private-workspace/out/EXAMPLE-EXAM",
+  "pmap": "/abs/path/to/private-workspace/pmap.json",
+  "build_stats": "/abs/path/to/private-workspace/build-stats.json",
+  "repo_relative_out_dir": "exams/EXAMPLE-EXAM/structured/v1"
+ },
+ "source": {
+  "expected_pdf_sha256": "<64-hex sha256 from the private exam manifest>",
+  "expected_bytes": 0
+ },
+ "upstream": {
+  "repo": "msaqlainhaneef1/certpassly-exam-pipeline",
+  "commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc"
+ },
+ "layout": {
+  "cover_pages": [
+   1
+  ],
+  "marketing_pages": [
+   2
+  ],
+  "visual_option_placeholder_texts": [
+   "See Explanation section for answer."
+  ],
+  "vector_drawings_note": "<measured note>",
+  "asset_deduplication_note": "<measured note>"
+ },
+ "evidence": {},
+ "carried_unresolved": [],
+ "schema": {
+  "title": "CertPassly private structured extraction layer v1 (EXAMPLE-EXAM pilot)",
+  "description": "Machine-checkable schema for the source-grounded extraction layer. Every record is private. Answer-reference material is fail-closed: it may exist only in this private layer, never in exports.",
+  "source_kind_extension": [
+   "typed_text_with_answer_image"
+  ]
+ },
+ "expected": {
+  "pages": 0,
+  "questions": 0,
+  "assets": 0,
+  "usages": 0,
+  "roles": {
+   "question_prompt": 0,
+   "exhibit": 0,
+   "answer_reference": 0,
+   "cover_decoration": 0
   },
-  "paths": {
-    "pdf": "/abs/path/to/private-workspace/owner-files/EXAMPLE-EXAM/source.pdf",
-    "repo": "/abs/path/to/private-exam-repository-worktree",
-    "out_dir": "/abs/path/to/private-exam-repository-worktree/exams/EXAMPLE-EXAM/structured/v1",
-    "upstream_out": "/abs/path/to/private-workspace/out/EXAMPLE-EXAM",
-    "pmap": "/abs/path/to/private-workspace/pmap.json",
-    "build_stats": "/abs/path/to/private-workspace/build-stats.json",
-    "repo_relative_out_dir": "exams/EXAMPLE-EXAM/structured/v1"
+  "answer_kinds": {
+   "owner_typed_text": 0,
+   "typed_text_with_answer_image": 0,
+   "answer_reference_image": 0
   },
-  "source": {"expected_pdf_sha256": "<64-hex sha256 from the private exam manifest>", "expected_bytes": 0},
-  "upstream": {"repo": "msaqlainhaneef1/certpassly-exam-pipeline", "commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc"},
-  "layout": {
-    "cover_pages": [1],
-    "marketing_pages": [2],
-    "visual_option_placeholder_texts": ["See Explanation section for answer."],
-    "vector_drawings_note": "<measured note>",
-    "asset_deduplication_note": "<measured note>"
+  "unknown_types": 0,
+  "overlay": {
+   "active_in_current_site_draft": 0
   },
-  "evidence": {},
-  "carried_unresolved": [],
-  "schema": {
-    "title": "CertPassly private structured extraction layer v1 (EXAMPLE-EXAM pilot)",
-    "description": "Machine-checkable schema for the source-grounded extraction layer. Every record is private. Answer-reference material is fail-closed: it may exist only in this private layer, never in exports.",
-    "source_kind_extension": ["typed_text_with_answer_image"]
+  "cover_marketing_runs": 0,
+  "question_content_runs": 0,
+  "packaged_status": {
+   "not_in_archived_media": 0,
+   "cover_not_packaged": 0
   },
-  "expected": {
-    "pages": 0, "questions": 0, "assets": 0, "usages": 0,
-    "roles": {"question_prompt": 0, "exhibit": 0, "answer_reference": 0, "cover_decoration": 0},
-    "answer_kinds": {"owner_typed_text": 0, "typed_text_with_answer_image": 0, "answer_reference_image": 0},
-    "unknown_types": 0,
-    "overlay": {"active_in_current_site_draft": 0},
-    "cover_marketing_runs": 0, "question_content_runs": 0,
-    "packaged_status": {"not_in_archived_media": 0, "cover_not_packaged": 0},
-    "archived_matches": 0,
-    "unresolved_min": 1
+  "archived_matches": 0,
+  "unresolved_min": 1
+ },
+ "report_notes": {
+  "known_limitations": [
+   "..."
+  ],
+  "no_false_completion_statement": "..."
+ },
+ "reconcile_notes": {
+  "_doc_claims": "P0-2 (director audit 2026-11-13): stage_log_claims and visual_draft_claims are MACHINE-VERIFIABLE claims; the reconciler recomputes every claimed number from the pinned upstream output files (extracted/split.json, cleanups.json, unparsed.json, layout.json, visual_draft.json) and fails on any mismatch. Omit both to record the stage log / visual draft as informational notes OUTSIDE the passed-check denominator (never synthetic-true checks). Only copy the numeric keys shown below, not _doc_claims.",
+  "count_systems_explained": [
+   "..."
+  ],
+  "no_silent_drops_statement": "...",
+  "stage_log_claims": {
+   "items": 0,
+   "image_keyed": 0,
+   "cleanups": 0,
+   "unparsed": 0,
+   "layout": "question_n_correct_answer"
   },
-  "report_notes": {"known_limitations": ["..."], "no_false_completion_statement": "..."},
-  "reconcile_notes": {"count_systems_explained": ["..."], "no_silent_drops_statement": "..."},
-  "manifest": {
-    "pdf_repo_path": "exams/EXAMPLE-EXAM/source/source.pdf",
-    "extract_log_line": "<measured pinned-extractor log line>",
-    "inventory": [{"path": "exams/EXAMPLE-EXAM/manifest.json", "classification": "source-ground-truth", "note": "owner manifest"}],
-    "immutability_untouched": ["exams/EXAMPLE-EXAM/source/*"],
-    "immutability_added": ["exams/EXAMPLE-EXAM/structured/v1/**"]
-  },
-  "export_notes": {"known_divergences": ["..."], "site_taxonomy_note": "..."}
+  "visual_draft_claims": {
+   "entries": 0,
+   "kinds": {
+    "dropdown": 0,
+    "yes_no": 0,
+    "unknown": 0
+   },
+   "with_notes": 0
+  }
+ },
+ "manifest": {
+  "pdf_repo_path": "exams/EXAMPLE-EXAM/source/source.pdf",
+  "extract_log_line": "<measured pinned-extractor log line>",
+  "inventory": [
+   {
+    "path": "exams/EXAMPLE-EXAM/manifest.json",
+    "classification": "source-ground-truth",
+    "note": "owner manifest"
+   }
+  ],
+  "immutability_untouched": [
+   "exams/EXAMPLE-EXAM/source/*"
+  ],
+  "immutability_added": [
+   "exams/EXAMPLE-EXAM/structured/v1/**"
+  ]
+ },
+ "export_notes": {
+  "known_divergences": [
+   "..."
+  ],
+  "site_taxonomy_note": "..."
+ }
 }
