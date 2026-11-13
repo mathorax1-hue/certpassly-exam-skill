@@ -269,7 +269,7 @@
       "test": "tests/test_phase1_run_all.py",
       "command": "certpassly phase1-extract --config PRIVATE/config.json --upstream-scripts DIR [--dry-run --resume --start-from STAGE --adversarial-base DIR]",
       "dependencies": "Python >=3.11; stage-dependent extras; pinned external upstream checkout",
-      "side_effects": "runs the deterministic stage pipeline via local python -m subprocesses; writes stage outputs and run-checkpoint.json next to the config",
+      "side_effects": "runs the deterministic stage pipeline via local python -m subprocesses; writes stage outputs and run-checkpoint.json next to the config (including the verified source_fingerprint and stage-0 audit summary); --resume/--start-from are gated by a fail-closed source guard that re-verifies the source PDF SHA-256/bytes against the config pins and the checkpoint fingerprint before any stage may be skipped (guard refusal = exit 3, no stage run, checkpoint untouched)",
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false

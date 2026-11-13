@@ -17,7 +17,9 @@ privacy through the export layer) + 4 director-audit P0 scenarios
 legitimate text-only single choice control, typed placeholder + ambiguous
 image fail-closed) + 3 director-audit-2 scenarios (visual_qa
 machine-visibility exit codes, editorial overlay provenance separation,
-stage-log/visual-draft claim tamper).
+stage-log/visual-draft claim tamper) + 1 director final-correction scenario
+(run_all --resume/--start-from source-integrity gate: changed/missing PDF and
+stale checkpoint must be refused before any stage runs).
 
 Usage: python -m certpassly.phase1.adversarial --base <scratch-dir>
           --upstream <pinned-scripts-dir> [--engine <dir>]
@@ -1329,6 +1331,81 @@ def scenario_reconcile_claims_tamper():
     report("reconcile_stage_log_and_visual_draft_claims_tamper_fails", ok, detail)
 
 
+def scenario_run_all_resume_integrity_gate():
+    """Director final correction (2026-11-13): --resume / --start-from must
+    not bypass the source PDF SHA-256 / identity / integrity checks. A REAL
+    full run_all pass writes a fingerprint-verified checkpoint (positive
+    control: --resume is then a no-op and --start-from runs only the target
+    stage); a CHANGED source PDF, a MISSING source PDF and a STALE checkpoint
+    must each be REFUSED with exit 3 before any stage runs."""
+    pdf = f"{A.base}/resume_gate.pdf"
+    doc = fitz.open()
+    p1 = doc.new_page(width=792, height=612)
+    std_question(p1, 1, "Which synthetic option is correct?")
+    doc.save(pdf)
+    orig = open(pdf, "rb").read()
+    sha = hashlib.sha256(orig).hexdigest()
+    r, out = run_pinned(pdf, "SYN-RG")
+    out_dir = f"{A.base}/structured/SYN-RG"
+    os.makedirs(out_dir, exist_ok=True)
+    subprocess.run(_engine_cmd("make_pmap") + [pdf,
+                    f"{A.base}/workspace/out/SYN-RG/media/src", f"{A.base}/pmap-SYN-RG.json"],
+                   capture_output=True, text=True)
+    cfgp = make_config("SYN-RG", pdf, out_dir, sha)
+    rb = subprocess.run(_engine_cmd("build_structured_v1") + [cfgp],
+                        capture_output=True, text=True)
+    ok = rb.returncode == 0
+    detail = f"builder exit {rb.returncode}"
+    if ok:
+        _patch_config(cfgp, expected=_derive_expected(out_dir),
+                      manifest={"pdf_repo_path": pdf, "extract_log_line": "synthetic adversarial",
+                                "inventory": [], "immutability_untouched": [], "immutability_added": []})
+
+        def runall(*extra):
+            return subprocess.run([sys.executable, "-m", "certpassly.phase1.run_all",
+                                   "--config", cfgp, "--upstream-scripts", A.upstream,
+                                   "--skip-adversarial", *extra],
+                                  capture_output=True, text=True)
+
+        ckpt = f"{A.base}/run-checkpoint.json"  # written next to the config
+        r_full = runall()                        # real stages, end to end
+        ckpt_bytes = open(ckpt, "rb").read() if os.path.exists(ckpt) else None
+        # positive controls over the verified checkpoint
+        r_resume = runall("--resume")
+        r_sf = runall("--start-from", "visual_qa")
+        # negative: source PDF changed (tampered) after the completed run
+        with open(pdf, "ab") as f:
+            f.write(b"tampered-trailer-bytes")
+        r_changed = runall("--resume")
+        r_changed_sf = runall("--start-from", "validate_structured_v1")
+        with open(pdf, "wb") as f:               # restore the exact source
+            f.write(orig)
+        # negative: source PDF missing entirely
+        os.unlink(pdf)
+        r_missing = runall("--resume")
+        r_missing_sf = runall("--start-from", "build_structured_v1")
+        with open(pdf, "wb") as f:
+            f.write(orig)
+        # negative: stale checkpoint (fingerprint no longer describes the source)
+        stale = json.loads(ckpt_bytes)
+        stale["source_fingerprint"]["pdf_sha256"] = "f" * 64
+        json.dump(stale, open(ckpt, "w"))
+        r_stale = runall("--resume")
+        with open(ckpt, "wb") as f:               # restore the verified checkpoint
+            f.write(ckpt_bytes)
+        ok = (r_full.returncode == 0 and ckpt_bytes is not None
+              and r_resume.returncode == 0 and r_sf.returncode == 0
+              and r_changed.returncode == 3 and r_changed_sf.returncode == 3
+              and r_missing.returncode == 3 and r_missing_sf.returncode == 3
+              and r_stale.returncode == 3)
+        detail = (f"full {r_full.returncode}; resume-noop {r_resume.returncode}; "
+                  f"start-from-visual_qa {r_sf.returncode}; "
+                  f"changed-pdf resume {r_changed.returncode}/start-from {r_changed_sf.returncode}; "
+                  f"missing-pdf resume {r_missing.returncode}/start-from {r_missing_sf.returncode}; "
+                  f"stale-checkpoint resume {r_stale.returncode}")
+    report("run_all_resume_start_from_cannot_bypass_source_checks", ok, detail)
+
+
 def main():
     global A
     ap = argparse.ArgumentParser()
@@ -1386,10 +1463,12 @@ def main():
     scenario_visual_qa_exit_codes()
     scenario_editorial_overlay_separation()
     scenario_reconcile_claims_tamper()
+    # --- director final-correction scenario (--resume/--start-from guard) ---
+    scenario_run_all_resume_integrity_gate()
 
     passed = sum(1 for r_ in results if r_["passed"])
     print(f"\n===== ADVERSARIAL SUITE: {passed}/{len(results)} scenarios passed =====")
-    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2)",
+    out = dict(suite="phase1-extraction adversarial synthetic tests (ZAI-EXTRACT-003 public port: 17 ported + 10 + 4 director-audit P0 + 3 director-audit-2 + 1 final-correction guard)",
                date=A.date,
                synthetic_only=True,
                real_exam_data_used=False,

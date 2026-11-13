@@ -122,6 +122,16 @@ Private proof: https://github.com/mathorax1-hue/raw-exam/actions/runs/4318432940
 
 **Rule:** a check that cannot fail is not a check - hardcoded-True results and always-zero exits must never sit in a passed-check denominator; editorial (non-source) content must remain in an explicitly provenance-marked overlay and can never be presented as source transcription evidence.
 
+## 2026-11-13: director final correction - --resume/--start-from could bypass the source checks
+
+**Observed (director review of the correction package):** the stage orchestrator's `--resume` matched only the config file PATH, and `--start-from` simply began at the named stage - so after any completed run, a changed or deleted source PDF, an edited config, a swapped upstream pin or a hand-edited/stale checkpoint could skip the stage-0 source audit (and every other passed stage) without the SHA-256, identity or integrity checks ever re-running. Nothing enforced that the checkpoint still described the current source.
+
+**Fix:** every checkpoint now embeds a `source_fingerprint` (actual PDF SHA-256 + bytes, config content SHA-256, pinned upstream scripts tree hash, engine label, measured at run START) and the stage-0 audit summary (verdict, source sha, identity flag) read back from source-audit.json. A fail-closed SOURCE GUARD runs before any stage may be skipped: the PDF must exist right now and hash to the config-pinned `expected_pdf_sha256`/`expected_bytes`; the config must pin the source; the prior checkpoint must belong to this config, carry the SAME fingerprint and a valid AUDIT_COMPLETE / non-identity-ambiguous audit summary of that exact source; the on-disk source-audit.json (when present) must not describe a different source; and `--start-from` additionally requires every earlier planned stage to have exited 0 in that verified checkpoint. Refusal = exit 3 with NO stage run and the checkpoint left untouched; `--resume` with a missing/foreign checkpoint degrades to a FULL run from stage 0 (audit re-runs, nothing skipped). `--dry-run` also evaluates and reports the guard verdict so a would-be bypass is visible without side effects.
+
+**Tests:** 1 new adversarial scenario (35/35 total) running the REAL pipeline end-to-end: full pass then positive controls (resume no-op 0, start-from single stage 0) and negative fixtures - changed PDF (resume 3 / start-from 3), missing PDF (resume 3 / start-from 3), stale checkpoint (resume 3). 15 new unit tests (165 total): changed/missing PDF refusals, unpinned-config refusal, stale checkpoint (tampered pdf hash, edited config, swapped upstream tree, pre-fingerprint checkpoint), invalid/conflicting audit summaries, start-from without verified checkpoint, start-from past unmet prerequisites, positive start-from control, checkpoint fingerprint/audit recording, dry-run guard refusal. The public synthetic fixture now creates a real (deterministic) source PDF whose hash is pinned consistently across config/manifest/provenance.
+
+**Rule:** a checkpoint is a receipt, not a permission slip - skipping a verification stage is only ever valid while the receipt still provably describes the exact source, config, pinned code and engine it was issued for; when in doubt, re-run from stage 0.
+
 ## Sustainable incident-record format
 
 Every future incident or test finding should record:

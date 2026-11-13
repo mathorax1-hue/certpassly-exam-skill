@@ -107,10 +107,26 @@ git -C vendor/certpassly-exam-pipeline rev-parse HEAD
   always reproduces the same `structured/v1` tree byte-identically (data
   files). Re-running a stage is therefore always safe.
 - **Stage checkpoints**: `certpassly phase1-extract` writes
-  `run-checkpoint.json` next to the config. `--resume` skips stages that
-  already exited 0 for the same config and continues at the first incomplete
-  stage; `--start-from <stage>` begins at a named stage;
-  `--dry-run` prints the planned commands and executes nothing.
+  `run-checkpoint.json` next to the config, including the verified
+  `source_fingerprint` (actual PDF SHA-256/bytes, config content hash, pinned
+  upstream scripts tree hash, engine) and the stage-0 audit summary.
+  `--resume` skips stages that already exited 0 for the same config AND the
+  same verified source fingerprint, and continues at the first incomplete
+  stage; `--start-from <stage>` begins at a named stage over a verified
+  checkpoint whose earlier stages all exited 0; `--dry-run` prints the
+  planned commands and executes nothing (the guard still reports its
+  verdict).
+- **Resume cannot bypass the source checks** (director final correction,
+  2026-11-13): before ANY stage may be skipped, a fail-closed source guard
+  re-verifies at resume time that the source PDF still exists and hashes to
+  the config-pinned `expected_pdf_sha256`/`expected_bytes`, that the
+  checkpoint embeds an `AUDIT_COMPLETE`/non-ambiguous audit of that exact
+  source, and (for `--start-from`) that every earlier stage passed. A
+  changed/missing PDF, an edited config, a swapped upstream pin or a stale
+  checkpoint refuses with **exit 3** before any stage runs, leaving the
+  checkpoint untouched; re-run from stage 0 so the audit re-verifies.
+  `--resume` with a missing/foreign checkpoint cannot authorize skipping and
+  degrades to a FULL run from stage 0 (audit re-runs, nothing is skipped).
 - **Per-stage idempotence**: each stage only reads its declared inputs
   (source PDF, pinned extractor output, config) and rewrites its own outputs.
 
@@ -156,7 +172,7 @@ python -m certpassly.phase1.adversarial --base <scratch> \
 # or everything at once (stages 3-4 orchestrated, with checkpoints):
 certpassly phase1-extract --config <config>.json --upstream-scripts "<upstream>/scripts"
 certpassly phase1-extract --config <config>.json --upstream-scripts "<upstream>/scripts" --dry-run
-certpassly phase1-extract --config <config>.json --upstream-scripts "<upstream>/scripts" --resume
+certpassly phase1-extract --config <config>.json --upstream-scripts "<upstream>/scripts" --resume   # guarded: re-verifies the source fingerprint first
 ```
 
 Every command supports `--help`. `certpassly phase1-info` prints the toolkit
@@ -226,6 +242,7 @@ private adapters may remain.
 | `FATAL: directory does not exist` (adversarial) | wrong upstream path | pass the pinned checkout's `scripts/` dir; verify the pin SHA |
 | `Unapproved upstream version` | checkout pin mismatch | stop and report; do not silently repin |
 | stage fails mid-pipeline | genuine source/layout issue | inspect `run-checkpoint.json`; fix the cause; `--resume` after the fix |
+| `source guard refused --resume/--start-from` (exit 3) | the source PDF changed/went missing, the config or upstream pin was edited, or the checkpoint is stale | nothing ran and the checkpoint is untouched; re-run from stage 0 WITHOUT the flags so the audit re-verifies the source |
 | wrong toolkit version | unpinned checkout | `git checkout <full-sha>`; `certpassly phase1-info` |
 
 **Rollback**: the toolkit only writes into the private `structured/v1` tree

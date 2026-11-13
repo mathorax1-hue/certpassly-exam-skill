@@ -14,7 +14,7 @@ import os
 
 
 def _q(n, *, source_kind, answer_raw, options_mode, entries, media_usages,
-       site_type, marker, upstream_pages):
+       site_type, marker, upstream_pages, pdf_sha="0" * 64):
     return {
         "schema_version": "structured-v1",
         "exam_code": "SYN-001",
@@ -37,7 +37,7 @@ def _q(n, *, source_kind, answer_raw, options_mode, entries, media_usages,
                           "confidence": "high"},
         "layout_profile": "question_n_correct_answer",
         "editorial_overlay_status": "active_in_current_site_draft",
-        "provenance": {"pdf_sha256": "0" * 64,
+        "provenance": {"pdf_sha256": pdf_sha,
                        "extracted_by": "synthetic fixture",
                        "upstream_split_question_key": f"q{n:03d}"},
         "review": {"status": "machine_extracted", "human_approved": False,
@@ -55,6 +55,21 @@ def build_fixture(root: str) -> dict:
     os.makedirs(os.path.join(v1, "assets"), exist_ok=True)
     os.makedirs(os.path.join(up, "extracted"), exist_ok=True)
 
+    # deterministic synthetic source PDF. Its bytes are never parsed by the
+    # unit suite (stages are mocked there); the run_all source guard, the
+    # validator readback checks and the config/manifest/provenance pins all
+    # hash it for real, so the fixture must pin the ACTUAL values.
+    pdf_bytes = (b"%PDF-1.4\n%certpassly-synthetic-fixture-source\n"
+                 b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+                 b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+                 b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n"
+                 b"trailer\n<< /Size 4 /Root 1 0 R >>\n%%EOF\n")
+    pdf_path = os.path.join(root, "synthetic.pdf")
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_bytes)
+    pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+    pdf_len = len(pdf_bytes)
+
     # 3 synthetic asset binaries (content-addressed names)
     assets = {}
     for i in (1, 2, 3):
@@ -64,7 +79,7 @@ def build_fixture(root: str) -> dict:
         with open(os.path.join(v1, "assets", f"{sha}.png"), "wb") as f:
             f.write(blob)
 
-    q1 = _q(1, source_kind="owner_typed_text", answer_raw="A",
+    q1 = _q(1, pdf_sha=pdf_sha, source_kind="owner_typed_text", answer_raw="A",
             options_mode="text_options",
             entries=[{"label": "A", "text": "synthetic option A"},
                      {"label": "B", "text": "synthetic option B"}],
@@ -73,7 +88,7 @@ def build_fixture(root: str) -> dict:
                            "pdftohtml_name": "p-001_001.png", "question_key": "q001",
                            "page": 1, "active_packaged_media_status": "active"}],
             site_type="single_choice", marker="QUESTION 1", upstream_pages=[1])
-    q2 = _q(2, source_kind="answer_reference_image", answer_raw="",
+    q2 = _q(2, pdf_sha=pdf_sha, source_kind="answer_reference_image", answer_raw="",
             options_mode="in_question_image", entries=[],
             media_usages=[{"usage_id": "u-p1-1-x12", "xref": 12, "asset": f"{assets[2]}.png", "asset_sha256": assets[2],
                            "role": "question_prompt", "privacy": "learner_visible_after_review",
@@ -84,7 +99,7 @@ def build_fixture(root: str) -> dict:
                            "pdftohtml_name": "p-002_002.png", "question_key": "q002",
                            "page": 1, "active_packaged_media_status": "active"}],
             site_type="single_choice", marker="QUESTION 2", upstream_pages=[1])
-    q3 = _q(3, source_kind="typed_text_with_answer_image", answer_raw="B",
+    q3 = _q(3, pdf_sha=pdf_sha, source_kind="typed_text_with_answer_image", answer_raw="B",
             options_mode="text_options",
             entries=[{"label": "A", "text": "synthetic option A3"},
                      {"label": "B", "text": "synthetic option B3"}],
@@ -93,11 +108,11 @@ def build_fixture(root: str) -> dict:
                            "pdftohtml_name": "p-002_002.png", "question_key": "q003",
                            "page": 1, "active_packaged_media_status": "active"}],
             site_type="multiple_select", marker="QUESTION 3", upstream_pages=[1])
-    q4 = _q(4, source_kind="missing", answer_raw="",
+    q4 = _q(4, pdf_sha=pdf_sha, source_kind="missing", answer_raw="",
             options_mode="none", entries=[],
             media_usages=[],
             site_type="unknown", marker="QUESTION 4", upstream_pages=[1])
-    q5 = _q(5, source_kind="typed_text_with_answer_image", answer_raw="A",
+    q5 = _q(5, pdf_sha=pdf_sha, source_kind="typed_text_with_answer_image", answer_raw="A",
             options_mode="in_question_image", entries=[],
             media_usages=[{"usage_id": "u-p1-2-x12", "xref": 12, "asset": f"{assets[2]}.png", "asset_sha256": assets[2],
                            "role": "question_prompt", "privacy": "learner_visible_after_review",
@@ -142,7 +157,7 @@ def build_fixture(root: str) -> dict:
 
     with open(os.path.join(v1, "source-manifest.json"), "w", encoding="utf-8") as f:
         json.dump({"schema_version": "structured-v1", "exam_code": "SYN-001",
-                   "source_pdf": {"sha256": "0" * 64, "bytes": 0,
+                   "source_pdf": {"sha256": pdf_sha, "bytes": pdf_len,
                                   "verified": {"page_count": 1}}}, f, indent=1)
 
     # question-index / unresolved / visual-transcription-drafts / README
@@ -225,12 +240,12 @@ def build_fixture(root: str) -> dict:
         "exam_code": "SYN-001",
         "generated_by": {"worker": "public synthetic tests", "date": "2026-11-13",
                          "environment": "unittest"},
-        "paths": {"pdf": os.path.join(root, "synthetic.pdf"),
+        "paths": {"pdf": pdf_path,
                   "repo": root, "out_dir": v1, "upstream_out": up,
                   "pmap": os.path.join(root, "pmap.json"),
                   "build_stats": os.path.join(root, "build-stats.json"),
                   "repo_relative_out_dir": "structured/v1"},
-        "source": {"expected_pdf_sha256": "0" * 64, "expected_bytes": 0},
+        "source": {"expected_pdf_sha256": pdf_sha, "expected_bytes": pdf_len},
         "upstream": {"repo": "msaqlainhaneef1/certpassly-exam-pipeline",
                      "commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc"},
         "layout": {"cover_pages": [], "marketing_pages": [],
