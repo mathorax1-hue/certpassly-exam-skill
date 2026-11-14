@@ -52,7 +52,7 @@ from .roles import (METHOD_NONE, METHOD_PRIORITY_A, METHOD_PRIORITY_B,
                     R_CLEAN_ASSET_MISSING, R_MARKED_ONLY_REVIEW_REQUIRED,
                     R_QUESTION_CROP_UNVERIFIED, R_SOURCE_IMAGE_AMBIGUOUS,
                     R_SOURCE_IMAGE_CORRUPT, R_SOURCE_IMAGE_LOW_RESOLUTION,
-                    R_SOURCE_SHA_MISMATCH, REVIEW_BLOCKED,
+                    R_SOURCE_SHA_MISMATCH, R_MULTI_EXHIBIT_MAPPING_REQUIRED, REVIEW_BLOCKED,
                     REVIEW_CLEAN_LOW_RESOLUTION, REVIEW_CLEAN_READY)
 
 EXHIBIT_REF_RX = re.compile(
@@ -558,6 +558,38 @@ def _decide_one_question(ctx, qid, qrec) -> dict:
             candidate = _try_priority_b_vector_exhibit(ctx, qid, qrec, page_no, issues)
             if candidate:
                 break
+
+    # P1 source-completeness gate: the legacy learner manifest/website media
+    # contract supports exactly ONE image per question. Never quietly ship a
+    # subset when the PDF contains two independent unmarked required exhibits.
+    # A clean+marked view of the SAME exhibit is fine (one clean source), as
+    # is a byte-duplicate image reused elsewhere; distinctly different clean
+    # question images are NOT interchangeable. Future multi-image packaging
+    # must be added to the upstream/site contract and verified separately.
+    independent_clean = {}
+    for u in q_files:
+        fname=u["file"]
+        if is_verified_clean(fname,u):
+            independent_clean[ctx.file_record(fname)["sha256"]] = fname
+    if len(independent_clean) > 1:
+        blocked_reasons.append({
+            "reason":R_MULTI_EXHIBIT_MAPPING_REQUIRED,
+            "detail":"source question has multiple independent clean exhibits "
+                     "but current learner media contract writes only one; "
+                     "refusing partial question image set",
+            "source_files":sorted(independent_clean.values()),
+        })
+        _finalize_roles(decisions, marks_by_file, None, inferred_swap, pair_clean_members)
+        return {
+            "question_id":qid,
+            "requires_image":True,
+            "role_decisions":decisions,
+            "clean_candidate":None,
+            "is_learner_eligible":False,
+            "review_status":REVIEW_BLOCKED,
+            "issues":issues,
+            "blocked_reasons":blocked_reasons,
+        }
 
     # --- outcome ------------------------------------------------------------
     if candidate is None:
