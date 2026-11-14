@@ -63,16 +63,15 @@ def _gallery(pdf_path, qid, pages, question_assets, answer_assets,
     import fitz
     from PIL import Image, ImageDraw, ImageOps
     previews=[]
-    if pages:
-        try:
-            with fitz.open(pdf_path) as doc:
-                page_no=pages[0]
-                if isinstance(page_no,int) and 1<=page_no<=len(doc):
-                    pix=doc[page_no-1].get_pixmap(matrix=fitz.Matrix(1,1),alpha=False)
-                    im=Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-                    previews.append((f"Original PDF page {page_no}",im))
-        except Exception:
-            pass
+    if not pages or not isinstance(pages[0],int):
+        raise OperationalError("original PDF page number absent from source inventory")
+    with fitz.open(pdf_path) as doc:
+        page_no=pages[0]
+        if not (1<=page_no<=len(doc)):
+            raise OperationalError("original source page is outside pinned PDF")
+        pix=doc[page_no-1].get_pixmap(matrix=fitz.Matrix(1,1),alpha=False)
+        im=Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+        previews.append((f"Original PDF page {page_no}",im))
     for role, filenames in (("QUESTION SOURCE",question_assets),("ANSWER REFERENCE",answer_assets)):
         for filename in filenames:
             try:
