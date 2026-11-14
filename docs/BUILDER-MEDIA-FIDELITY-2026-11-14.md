@@ -110,6 +110,19 @@ accessibility, label selection, hitbox fidelity and site runtime are
 **UNTESTED**: a valid contract proves neither actual import compatibility nor
 the app's interactive behavior.
 
+### Responsive interaction audits (B4)
+
+`interaction_audit.audit_interaction_geometry(layout, registry,
+native_width=..., native_height=...)` uses **original verified raster**
+dimensions and an explicit viewport/DPR/zoom matrix. It checks normalized
+hotspot, drop-zone and blank geometry for sub-44px CSS touch targets,
+overlapping regions and invalid/missing positions. It blocks undersized
+or ambiguous regions; a browser may later add larger CSS hit areas, but
+those must be demonstrated in the actual site and cannot be assumed here.
+The module always reports site and keyboard behavior **UNTESTED**. See
+`tests/test_interaction_audit.py` for rotation, overlap, tiny touch target
+and missing-source negative tests.
+
 ### CLI example (synthetic or private local paths only)
 
 ```bash
@@ -158,7 +171,7 @@ python -m pip check
 python -m unittest tests.test_builder_b0_marks \
   tests.test_builder_quality_profiles tests.test_media_layout_contract \
   tests.test_media_layout_schema tests.test_media_layout_cli \
-  tests.test_upstream_media_projection \
+  tests.test_upstream_media_projection tests.test_interaction_audit \
   tests.test_builder_release_gate -v
 python -m unittest tests.test_media_prep_inventory \
   tests.test_media_prep_quality tests.test_media_prep_privacy \
