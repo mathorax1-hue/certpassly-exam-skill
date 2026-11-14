@@ -379,7 +379,10 @@ def project_upstream_question(question: dict, *, source: dict, media: list,
     elif family == "image_regions":
         regions = safe_ids(content.get("regions"))
         # original upstream content.regions may include normalized_coordinates.
-        for rec, item in zip(regions, content.get("regions") or []):
+        by_id = {item["id"]: item for item in (content.get("regions") or [])
+                 if isinstance(item, dict) and isinstance(item.get("id"), str)}
+        for rec in regions:
+            item = by_id.get(rec.get("id")) or {}
             if "normalized_coordinates" in item:
                 rec["rect"] = item["normalized_coordinates"]
         layout["controls"]["hotspots"] = with_rect(regions, "hotspots")
