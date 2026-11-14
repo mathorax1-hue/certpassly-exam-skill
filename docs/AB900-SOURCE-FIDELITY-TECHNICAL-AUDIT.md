@@ -1,0 +1,40 @@
+# AB-900 source-fidelity difference audit (technical phase only)
+
+This generic tool belongs in the public reusable skill. **Never commit private PDF, questions, answers, per-question reports or reviewer images here.**
+
+## What it checks
+
+`scripts/audit_pilot_source_fidelity.py` compares the archived and freshly extracted `split.json` by question key and by `stem`, `options`, and `answer_raw`. Its JSON report emits fingerprints rather than private text. Answer-key differences are recorded for later research/key verification; they are not auto-corrected. It inventories V2 files and detects some missing learner content or reviewer-media references. Existing source flags are retained, never automatically cleared.
+
+This is **not** a PDF visual verifier, official source check, schema validator, complete renderer audit, or website importer test. A 0 exit status indicates only that the scripted comparison found no outstanding issues; it does not imply independent PDF fidelity.
+
+## Run locally against private data
+
+```bash
+python scripts/audit_pilot_source_fidelity.py \
+  --archive-split /private/raw/exams/AB-900/research-archive/AB-900-package/AB-900-package/AB-900/extracted/split.json \
+  --fresh-split /private/ab900-fresh/extracted/split.json \
+  --v2-dir /private/raw/exams/AB-900/technical-v2-pilot/question-v2 \
+  --cannot-convert /private/raw/exams/AB-900/technical-v2-pilot/cannot-convert.json \
+  --output /private/raw/exams/AB-900/technical-v2-pilot/source-field-diff.json
+```
+
+The tool intentionally exits 2 with unresolved fidelity flags, which is a **correct safety outcome**, not a reason to mark the workflow publication-ready.
+
+Run synthetic tests:
+
+```bash
+python -m unittest tests/test_audit_pilot_source_fidelity.py -v
+```
+
+## Human-readable technical verification queue
+
+1. Review all differences by original PDF page, question, stem and options. Record PDF page number, exact corrected structure and source evidence, preserving original values until adjudicated.
+2. For every blocked dropdown, matrix, hotspot or image-based question, verify all text, labels, cells, choices, slot IDs, interaction targets and semantic order against private source evidence. Represent it with native HTML/CSS/SVG and Question Format V2, not an answer-area screenshot.
+3. Preserve answer-related warnings separately; do not research, replace, infer or expose answer keys in the current technical-only pass.
+4. Run pinned upstream JSON schema and registry validation, snapshot reproducibility checks, HTML/SVG sanitization, private reference exclusions, accessibility and interaction tests, and importer contract dry-run.
+5. Only after individually resolving source-fidelity flags in the **private** manifest can draft technical eligibility be recomputed. Schema success or a green workflow alone never grants approval.
+
+## Boundaries
+
+No live import, main-branch merge, editorial approval, answer research, release promotion or publication. Keep evidence and exact question text in `raw-exam`; keep only generic code and synthetic fixtures in `certpassly-exam-skill`.
