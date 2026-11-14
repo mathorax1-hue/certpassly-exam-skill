@@ -52,5 +52,31 @@ class SourceFidelityAuditTests(unittest.TestCase):
             self.assertFalse(r["technical_eligible_all"])
             self.assertEqual(r["status"], "BLOCKED_SOURCE_VERIFICATION")
 
+
+    def test_documented_supersession_not_mislabeled_as_extraction_bug(self):
+        archived_bank = {"questions": [{"question_key": "q001",
+            "owner_question_replaced": "q001",
+            "created_source": "owner_file slot q001 SUPERSEDED; original",
+            "original_editorial_id": "cp-ab900-q001-r1"}]}
+        replacements = audit.documented_replacements(archived_bank)
+        self.assertEqual(replacements, {"q001": "cp-ab900-q001-r1"})
+        old = {"q001": {"stem": "original PDF text", "options": [], "answer_raw": ""}}
+        new = {"q001": {"stem": "new editorial content", "options": [], "answer_raw": ""}}
+        with tempfile.TemporaryDirectory() as d:
+            file = Path(d) / "q001.v1.json"
+            file.write_text(json.dumps({"question_key": "q001",
+                "learner": {"stem": {"text": "new editorial content"}}}), encoding="utf-8")
+            report = audit.build_report(old, new, d, [], expected=1,
+                                        replacements=replacements)
+            self.assertEqual(report["documented_replacement_question_count"], 1)
+            self.assertEqual(report["unexplained_difference_question_count"], 0)
+            self.assertTrue(report["technical_eligible_all"])
+            self.assertFalse(report["source_fidelity_independently_verified"])
+
+    def test_replacement_without_provenance_is_not_auto_classified(self):
+        bank = {"questions": [{"question_key": "q001",
+            "owner_question_replaced": "q001", "original_editorial_id": "x"}]}
+        self.assertEqual(audit.documented_replacements(bank), {})
+
 if __name__ == "__main__":
     unittest.main()
