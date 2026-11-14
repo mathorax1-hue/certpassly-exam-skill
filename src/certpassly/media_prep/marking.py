@@ -82,7 +82,7 @@ def detect_marks(pil_rgb) -> dict:
 
     Returns a marking summary dict:
       {"detected_mark_boxes": int, "marks": [{x,y,w,h,kind} normalized],
-       "dark_fraction": float, "method": "opencv-connected-components-v3",
+       "dark_fraction": float, "method": "opencv-connected-components-v4",
        "note": "..."}
     Coordinates are normalized to [0,1].
     """
@@ -149,15 +149,46 @@ def detect_marks(pil_rgb) -> dict:
                               w=round(w / W, 4), h=round(h / H, 4),
                               kind=kind, px=[x, y, w, h]))
 
+    # B2: selected color UI states can be brighter than the grayscale floor.
+    # A blue filled radio (e.g. RGB 20,104,207) has intensity above the
+    # dark-mask threshold, so the former detector returned ZERO marks.
+    # Search saturated, compact and *filled* connected components separately.
+    # A gray/white hollow radio or dropdown border does not meet this test.
+    # A similar-looking colored chart dot is intentionally AMBIGUOUS and
+    # blocked rather than mislabeled a proven clean learner answer area.
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    chromatic = ((hsv[:, :, 1] >= 85) & (hsv[:, :, 2] >= 40)).astype(np.uint8)
+    for x, y, w, h, sub in _components(chromatic):
+        area = int(sub.sum())
+        fill = area / float(w * h)
+        ratio = w / float(h)
+        if not (8 <= w <= 36 and 8 <= h <= 36 and
+                0.58 <= ratio <= 1.72 and fill >= 0.58 and
+                area >= 40 and w / float(W) <= 0.08 and h / float(H) <= 0.08):
+            continue
+        # The dark detector may have caught the same colored component.
+        # Avoid inflating a mark count without losing the fail-closed result.
+        if any(
+            abs((m["px"][0] + m["px"][2] / 2) - (x + w / 2)) < 4 and
+            abs((m["px"][1] + m["px"][3] / 2) - (y + h / 2)) < 4
+            for m in marks
+        ):
+            continue
+        marks.append({
+            "x": round(x / W, 4), "y": round(y / H, 4),
+            "w": round(w / W, 4), "h": round(h / H, 4),
+            "kind": "filled_chromatic_control", "px": [x, y, w, h],
+        })
+
     # Deterministic order (top-left first) regardless of component numbering.
     marks.sort(key=lambda m: (m["y"], m["x"], m["w"], m["h"]))
     return {
         "detected_mark_boxes": len(marks),
         "marks": marks,
         "dark_fraction": round(dark_fraction, 6),
-        "method": "opencv-connected-components-v3",
+        "method": "opencv-connected-components-v4",
         "note": ("advisory machine detection of pen-like selection marks "
-                 "(dark or colored hollow shapes, solid strokes, pen dots); "
+                 "(dark/colored hollow shapes, colored filled controls, solid strokes, pen dots); "
                  "never used to erase or reconstruct content; a detection "
                  "refuses learner eligibility, it does not clean anything; "
                  "heavy blur can fade marks below the dark threshold - the "
