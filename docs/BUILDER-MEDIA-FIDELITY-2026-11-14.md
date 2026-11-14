@@ -172,6 +172,7 @@ python -m unittest tests.test_builder_b0_marks \
   tests.test_builder_quality_profiles tests.test_media_layout_contract \
   tests.test_media_layout_schema tests.test_media_layout_cli \
   tests.test_upstream_media_projection tests.test_interaction_audit \
+  tests.test_private_media_replay \
   tests.test_builder_release_gate -v
 python -m unittest tests.test_media_prep_inventory \
   tests.test_media_prep_quality tests.test_media_prep_privacy \
@@ -201,6 +202,41 @@ A private pass needs original source-hash and artifact readback, real
 pixel/source human inspection and separate authorized human content
 approval. Z.ai is the independent engineering replay/verifier; AI review
 alone is NOT the owner-designated human signoff.
+
+### Executable B6 private evidence builder (new)
+
+`replay_audit.run_private_media_replay(...)` and
+`scripts/replay_private_media.py` are **actual code**, not a request to an
+external reviewer to invent tooling. They rehash the original PDF, rebuild
+the current original image inventory using the *pinned* extractor outputs,
+compare every original source asset hash and role against the persisted
+private inventory, verify the signed manifest's structure, rehash clean
+candidate files, rerun selected-state detection and recheck any PDF-region
+crop against the original page. All image-requiring questions get a
+PRIVATE per-question contact sheet containing the original PDF page, every
+original question/answer screenshot and the current learner candidate.
+The report always marks independent Z.ai image inspection and accountable
+human approval PENDING; any blocked question remains blocked.
+
+Execute ONLY in the private original-source environment:
+
+```bash
+python scripts/replay_private_media.py \
+  --config /PRIVATE/media-prep-config.json \
+  --expected-source-assets 87 --expected-image-questions 44 \
+  --gallery-folder builder-replay
+```
+
+Output stays under `config.output.private_dir/builder-replay`, NEVER the
+learner/media directory or a public CI artifact. It contains private PDF
+page renderings/answer-reference thumbnails and therefore **MUST NOT** be
+committed to any public GitHub repository or sent to a public CI runner.
+Exit 0 means the **machine-only** replay emitted complete evidence with
+no detected issues, NOT that Z.ai inspected the screenshots or that an
+exam is releasable; exit 2 is BLOCKED, exit 1 operational.
+The full independent PDF/image replay has **not** been executed by the
+builder against the original LFS source. The mandatory public CI uses
+synthetically generated PDF/images only.
 
 Any uncertainty, unsupported type, marked content, private source missing
 or untested site contract remains **BLOCKED**. Original 35 image candidates,
