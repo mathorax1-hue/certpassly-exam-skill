@@ -155,3 +155,77 @@ def choose_profile(source_img, question_record=None) -> str:
     if hint in ("diagram", "screenshot"):
         return hint
     return "screenshot"
+
+
+def responsive_density_matrix(source_img, *, max_css_width=640,
+                              viewports=(320, 375, 768, 1024, 1440),
+                              dprs=(1, 2), zooms=(1, 2),
+                              minimum_density=1.0):
+    """B3 truthful source-pixel audit, not a simulated browser approval.
+
+    The image is displayed at min(viewport, max_css_width) CSS px at 100%
+    zoom; a 200% zoom needs twice the logical source density. DPR controls
+    whether native pixels can satisfy the physical display sample budget.
+    DO NOT use an upscaled export's new width as source_img.width.
+    """
+    import math
+    native = source_img.width
+    if not math.isfinite(max_css_width) or max_css_width <= 0:
+        raise ValueError("max_css_width must be positive")
+    if minimum_density <= 0:
+        raise ValueError("minimum_density must be positive")
+    rows = []
+    for viewport in viewports:
+        for dpr in dprs:
+            for zoom in zooms:
+                if any(not isinstance(v, (int, float)) or
+                       not math.isfinite(v) or v <= 0 for v in (viewport, dpr, zoom)):
+                    raise ValueError("viewports, DPRs and zooms must be positive")
+                css_width = min(viewport, max_css_width) * zoom
+                density = native / css_width
+                rows.append({
+                    "viewport_css_px": viewport,
+                    "dpr": dpr, "zoom": zoom,
+                    "display_css_px": round(css_width, 3),
+                    "source_native_width_px": native,
+                    "native_pixels_per_css_px": round(density, 4),
+                    "meets_minimum_density": bool(density >= minimum_density),
+                    "meets_device_sample_budget": bool(native >= css_width * dpr),
+                })
+    return {
+        "source_native_width_px": native,
+        "source_pixel_provenance": "native; never upscale to clear quality",
+        "rows": rows,
+        "all_minimum_density_ok": all(r["meets_minimum_density"] for r in rows),
+        "all_device_budgets_ok": all(r["meets_device_sample_budget"] for r in rows),
+        "site_render_tested": False,
+    }
+
+
+def region_blur_matrix(source_img, *, columns=3, rows=3):
+    """B3 per-region blur visibility proxy; NOT OCR or semantic crop proof.
+
+    Blurry or tiny footer/options can be lost in a global sharpness average.
+    Reports variance for every source-pixel tile, with no resizing.
+    """
+    cv2, np = _lazy()
+    if not (1 <= columns <= 12 and 1 <= rows <= 12):
+        raise ValueError("tile dimensions must be between 1 and 12")
+    gray = cv2.cvtColor(np.asarray(source_img.flattened_rgb()),
+                        cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
+    out = []
+    for ry in range(rows):
+        y0, y1 = round(ry * h / rows), round((ry + 1) * h / rows)
+        for cx in range(columns):
+            x0, x1 = round(cx * w / columns), round((cx + 1) * w / columns)
+            roi = gray[y0:y1, x0:x1]
+            if roi.size < 16:
+                variance = 0.0
+            else:
+                variance = float(cv2.Laplacian(roi, cv2.CV_64F).var())
+            out.append({"row": ry, "column": cx, "bbox_px": [x0, y0, x1, y1],
+                        "blur_laplacian_variance": round(variance, 2)})
+    return {"tiles": out, "source_width": w, "source_height": h,
+            "semantic_text_legibility_tested": False,
+            "clipped_options_checked_by_human": False}
