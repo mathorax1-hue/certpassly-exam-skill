@@ -112,3 +112,48 @@ Passing the offline projection proves neither a real site importer nor
 database persistence, encryption, browser interaction, deployment, or release
 security. Those tests must be performed against the actual authorized
 website/staging contract in a later controlled step.
+
+## Reproducible source-image repairs and scoped screenshot-shape evidence
+
+Keep **all** source images, correction ledgers, and generated reports in the
+private raw-exam repository. The publicly reusable scripts are:
+
+- `scripts/apply_source_visual_fidelity_patches.py`: validates each original
+  answer-area image SHA-256 before correcting the native learner prompt, matrix
+  rows, or converting a source navigation menu to an explicit single-choice
+  control. The menu migration retains the pre-existing owner answer selection
+  through an audited ID remap; it does not independently research its accuracy.
+- `scripts/apply_verified_exhibit_transcriptions.py`: validates original
+  exhibit image bytes against SHA-256 in the private transcription ledger,
+  then adds inspected source facts as HTML without modifying the answer.
+- `scripts/audit_source_screenshot_shapes.py`: validates the **original
+  owner PDF SHA-256**, source screenshot existence/hashes, reviewer-recorded
+  question type, option/row counts and key learner-visible source facts.
+  Its `scoped_shape_pass` does not assert full source PDF transcription.
+- `scripts/audit_visual_transcription_crosscheck.py`: compares generated V2
+  structures against the **historical** authored visual-transcription ledger.
+  When a new, source-pixel-reviewed correction replaces an old inaccurate
+  ledger entry, the historical crosscheck reports an expected difference.
+  Preserve the old baseline and the new correction receipt rather than
+  reverting the corrected learner content.
+
+Private pilot repeatability is implemented in
+`raw-exam/.github/workflows/ab900-one-pdf-technical-v2.yml`. Its workflow
+checks private evidence under `exams/AB-900/evidence/` and saves generated
+receipts under `exams/AB-900/technical-v2-pilot/`.
+
+Run the public synthetic tests with:
+
+```bash
+python -m unittest tests.test_apply_source_visual_fidelity_patches \
+  tests.test_apply_verified_exhibit_transcriptions \
+  tests.test_audit_source_screenshot_shapes \
+  tests.test_audit_visual_transcription_crosscheck -v
+```
+
+**Scope boundary:** historical answer-area screenshot matching, visible
+exhibit transcriptions, V2 schema and local importer projections do not prove
+complete question wording, browser accessibility, site API reveal security,
+database imports, or server-side encryption. Keep source-fidelity and website
+staging gates explicitly blocked until those properties are actually tested.
+No production deployment, approval or answer research is authorized here.
