@@ -110,6 +110,23 @@ def detect_marks(pil_rgb) -> dict:
     min_area_rel = 0.0008
     min_area = min_area_rel * W * H
 
+    def plain_menu_frame(x, y, w, h, sub, area):
+        """Ignore only a 1px, axis-aligned *structural* dropdown outline.
+
+        Real menu screenshots contain three or four perfectly straight
+        component-boundary edges, but an answer-marked overlay is typically
+        thick, curved, broken or an inner rectangle. No generic dark ellipse
+        or selected option is exempt. This is intentionally narrow: images
+        without strong structural proof remain reviewer-only.
+        """
+        if w < 90 or h < 35 or w / float(h) < 1.1:
+            return False
+        if area / float(w*h) > 0.044:
+            return False  # thick overlay or too much ink connected to border
+        edge = (float(sub[0, :].mean()), float(sub[-1, :].mean()),
+                float(sub[:, 0].mean()), float(sub[:, -1].mean()))
+        return sum(v >= 0.83 for v in edge) >= 3
+
     marks = []
     for x, y, w, h, sub in _components(dark):
         area = float(sub.sum())
@@ -144,6 +161,8 @@ def detect_marks(pil_rgb) -> dict:
         elif (fill >= 0.85 and 8 <= w <= 28 and 8 <= h <= 28
               and 0.7 <= aspect <= 1.4 and rel_w <= 0.12):
             kind = "filled_dot"
+        if kind == "pen_shape" and plain_menu_frame(x, y, w, h, sub, area):
+            continue
         if kind:
             marks.append(dict(x=round(x / W, 4), y=round(y / H, 4),
                               w=round(w / W, 4), h=round(h / H, 4),
@@ -156,6 +175,58 @@ def detect_marks(pil_rgb) -> dict:
     # A gray/white hollow radio or dropdown border does not meet this test.
     # A similar-looking colored chart dot is intentionally AMBIGUOUS and
     # blocked rather than mislabeled a proven clean learner answer area.
+    # Filled colorful logo/illustration icons are not selected radio controls.
+    # Require a neutral, geometrically enclosing 4-sided or radial selector
+    # frame around compact color fills. Preserve genuine selected blue radios
+    # and checkboxes (including JPEG-compressed versions). Without this
+    # evidence, color alone is NOT sufficient to call a selected answer.
+    neutral = ((chan_spread <= 28) & (gray >= 68) & (gray <= 210))
+
+    def neutral_selector_shell(x, y, w, h):
+        import math
+        cx, cy = x + (w-1)/2.0, y + (h-1)/2.0
+        if w > 36 or h > 36:
+            return False
+        # Rectangle and circle shell candidates 3..16 native pixels outside
+        # the colored region, resistant to anti-aliasing/JPEG quantization.
+        for padding in range(3, 17):
+            left, top = x-padding, y-padding
+            right, bottom = x+w-1+padding, y+h-1+padding
+            if left < 1 or top < 1 or right >= W-1 or bottom >= H-1:
+                continue
+            # 20 evenly distributed sample points along the four sides.
+            pts=[]
+            for t in (0.15,0.32,0.50,0.68,0.85):
+                pts.extend([
+                    (round(left + t*(right-left)),top),
+                    (round(left + t*(right-left)),bottom),
+                    (left,round(top+t*(bottom-top))),
+                    (right,round(top+t*(bottom-top))),
+                ])
+            hits=[bool(neutral[max(0,py-1):min(H,py+2),
+                               max(0,px-1):min(W,px+2)].any())
+                  for px,py in pts]
+            if sum(hits)>=12 and all(sum(hits[k::4])>=2 for k in range(4)):
+                return True
+            # Genuine radio control: neutral grey circular ring outside blue
+            # selected center. The complete ring should touch all quadrants.
+            rr=(max(w,h)-1)/2.0+padding
+            hit_quadrants=[False]*4
+            hit_count=0
+            for k in range(32):
+                angle=math.pi*2*k/32.0
+                xx=int(round(cx+rr*math.cos(angle)))
+                yy=int(round(cy+rr*math.sin(angle)))
+                if xx<1 or xx>=W-1 or yy<1 or yy>=H-1:
+                    continue
+                hit=bool(neutral[yy-1:yy+2,xx-1:xx+2].any())
+                if hit:
+                    hit_quadrants[k//8]=True
+                    hit_count+=1
+            if hit_count>=18 and all(hit_quadrants):
+                return True
+        return False
+
     hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
     chromatic = ((hsv[:, :, 1] >= 85) & (hsv[:, :, 2] >= 40)).astype(np.uint8)
     for x, y, w, h, sub in _components(chromatic):
@@ -178,6 +249,11 @@ def detect_marks(pil_rgb) -> dict:
               area >= 0.0008 * W * H and fill >= 0.65 and
               w / float(W) <= 0.8 and h / float(H) <= 0.2):
             kind = "chromatic_highlight_bar"
+        if kind == "filled_chromatic_control" and not neutral_selector_shell(x, y, w, h):
+            # Decorative app icons are too ambiguous to label as an answer
+            # solely from their saturation. The rest of the image still runs
+            # all dark-pen/ring/stroke and chromatic highlight checks.
+            continue
         if kind is None:
             continue
         # The dark detector may have caught the same colored component.
@@ -200,7 +276,7 @@ def detect_marks(pil_rgb) -> dict:
         "detected_mark_boxes": len(marks),
         "marks": marks,
         "dark_fraction": round(dark_fraction, 6),
-        "method": "opencv-connected-components-v4",
+        "method": "opencv-connected-components-v5",
         "note": ("advisory machine detection of pen-like selection marks "
                  "(dark/colored hollow shapes, colored filled controls/rings/highlights, solid strokes, pen dots); "
                  "never used to erase or reconstruct content; a detection "
