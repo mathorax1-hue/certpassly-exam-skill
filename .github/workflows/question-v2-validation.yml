@@ -1,0 +1,53 @@
+name: V2 pinned upstream compatibility and security audit
+on:
+  push:
+    branches:
+      - chatgpt/question-format-v2-validation-20261114
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pinned-v2-review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Checkout immutable external source (never vendored)
+        run: |
+          mkdir -p .review-vendor
+          git clone --no-checkout https://github.com/msaqlainhaneef1/certpassly-exam-pipeline.git .review-vendor/upstream
+          git -C .review-vendor/upstream checkout --detach 462fd237ae7f0c607bb00229e173b22d0f3298d2
+          test "$(git -C .review-vendor/upstream rev-parse HEAD)" = "462fd237ae7f0c607bb00229e173b22d0f3298d2"
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils tesseract-ocr
+          python -m pip install -e .review-vendor/upstream "jsonschema>=4.22,<5"
+      - name: Existing upstream unit and regression tests
+        run: |
+          cd .review-vendor/upstream
+          python -m unittest discover -s tests -v
+      - name: Skill repository unit and safety tests
+        if: always()
+        run: |
+          PYTHONPATH=src python -m unittest discover -s tests -v
+          python scripts/verify_tool_registry.py
+          python scripts/check_public_safety.py
+      - name: Cross-repository fail-closed V2 audit
+        if: always()
+        run: |
+          python scripts/audit_upstream_question_v2.py --upstream .review-vendor/upstream --output v2-synthetic-audit.json
+      - name: Upload synthetic-only audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-synthetic-audit
+          path: v2-synthetic-audit.json
+          if-no-files-found: warn

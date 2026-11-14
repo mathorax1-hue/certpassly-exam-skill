@@ -165,6 +165,17 @@
       "release_authority": false
     },
     {
+      "id": "upstream_v2_contract_audit",
+      "path": "scripts/audit_upstream_question_v2.py",
+      "test": "tests/test_upstream_v2_gate.py",
+      "command": "python scripts/audit_upstream_question_v2.py --upstream /path/to/pinned/checkout --output v2-synthetic-audit.json",
+      "dependencies": "Python >=3.11, Git; external immutable upstream checkout, jsonschema>=4.22,<5",
+      "side_effects": "read-only pinned upstream input and synthetic test data; writes local JSON report, no private assets or publication",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "visual_role_reconciliation",
       "path": "scripts/reconcile_visual_roles.py",
       "test": "tests/test_reconcile_visual_roles.py",
