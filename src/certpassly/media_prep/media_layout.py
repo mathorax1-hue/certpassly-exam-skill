@@ -21,6 +21,26 @@ FORBIDDEN_FIELDS = {
 }
 HEX = set("0123456789abcdef")
 
+# Minimal compatibility facts (type identifiers/flags), not upstream source code.
+# Exact key sets prevent a forged registry from swapping a disabled type for a
+# publishable type while preserving only the 16/7/7 counts.
+PINNED_PUBLISHABLE = frozenset((
+    "single_choice", "multiple_select", "true_false", "image_based_choice",
+    "scenario_standalone", "yes_no_matrix", "single_choice_matrix",
+    "inline_dropdown", "multi_blank_dropdown", "ordering", "matching",
+    "categorization", "drag_drop", "hotspot_single", "hotspot_multi",
+    "case_study_group",
+))
+PINNED_NONPUBLISHABLE = frozenset((
+    "multi_select_matrix", "text_cloze", "active_screen", "short_text",
+    "numeric", "multimedia_stimulus", "testlet",
+))
+PINNED_DISABLED = frozenset((
+    "sectioned_delivery", "unscored_pretest", "adaptive_delivery",
+    "simulation_ui", "terminal_task", "lab_task", "code_answer",
+))
+
+
 
 def _sha_ok(value):
     return isinstance(value, str) and len(value) == 64 and all(c in HEX for c in value)
@@ -38,6 +58,17 @@ def load_type_registry(path):
     )
     if counts != (16, 7, 7):
         raise ValueError(f"unexpected enabled/publishable registry flags: {counts}")
+    actual_pub = {k for k, t in data["types"].items()
+                  if t.get("enabled") and t.get("publishable")}
+    actual_nonpub = {k for k, t in data["types"].items()
+                     if t.get("enabled") and not t.get("publishable")}
+    actual_disabled = {k for k, t in data["types"].items()
+                       if not t.get("enabled")}
+    if (actual_pub != PINNED_PUBLISHABLE or
+        actual_nonpub != PINNED_NONPUBLISHABLE or
+        actual_disabled != PINNED_DISABLED):
+        raise ValueError("upstream type key/flag assignment differs from pinned v1; "
+                         "review a deliberate registry update before using it")
     return data
 
 
