@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          python -m unittest tests.test_media_prep_inventory tests.test_media_prep_quality tests.test_media_prep_privacy tests.test_media_prep_e2e tests.test_media_prep_cli -v > "$RUNNER_TEMP/unittest.log" 2>&1
+          python -m unittest tests.test_media_prep_inventory tests.test_media_prep_quality tests.test_media_prep_privacy tests.test_media_prep_e2e tests.test_media_prep_cli tests.test_builder_b0_marks -v > "$RUNNER_TEMP/unittest.log" 2>&1
           rc=$?
           cat "$RUNNER_TEMP/unittest.log"
           echo "unittest exit code: $rc"
