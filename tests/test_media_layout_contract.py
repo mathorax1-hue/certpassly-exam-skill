@@ -72,7 +72,7 @@ def layout(type_key):
     elif family == "container":
         out["shared_stimulus_id"] = "stimulus-1"
         out["child_question_ids"] = ["child-1"]
-    if type_key in ("hotspot_single", "hotspot_multi"):
+    if type_key in ("hotspot_single", "hotspot_multi", "image_based_choice"):
         out["media"] = [{"file": "media/synthetic.png", "sha256": SHA,
                          "source_sha256": SHA, "role": "interactive_background"}]
     return out
