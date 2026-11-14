@@ -30,6 +30,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y poppler-utils tesseract-ocr
           python -m pip install -e .review-vendor/upstream "jsonschema>=4.22,<5"
+      - name: Apply narrowly scoped reviewed security repairs to the detached V2 checkout
+        run: python scripts/patch_upstream_question_v2.py --upstream .review-vendor/upstream
       - name: Existing upstream unit and regression tests
         run: |
           cd .review-vendor/upstream
@@ -43,7 +45,7 @@ jobs:
       - name: Cross-repository fail-closed V2 audit
         if: always()
         run: |
-          python scripts/audit_upstream_question_v2.py --upstream .review-vendor/upstream --output v2-synthetic-audit.json
+          python scripts/audit_upstream_question_v2.py --upstream .review-vendor/upstream --output v2-synthetic-audit.json --ci-security-mode
       - name: Upload synthetic-only audit evidence
         if: always()
         uses: actions/upload-artifact@v4

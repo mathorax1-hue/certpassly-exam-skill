@@ -70,3 +70,9 @@ These are reproducible failures on a pinned public V2 commit with invented quest
 - Private original-PDF fidelity, multimodal diagrams, question/answer semantic correctness and cross-vendor real-exam runs were not exercised in this public synthetic suite.
 
 **Disposition:** keep PR draft and both main branches unchanged. Fix the five confirmed V2 validation/migration defects upstream, add permanent tests, rerun pinned audit and 30-type coverage, then perform private real-exam and site acceptance tests. No publication or merge approval.
+
+## Remediation patch, isolated from both main branches
+
+A checked source-delta script `scripts/patch_upstream_question_v2.py` applies only to the clean upstream commit `462fd237ae7f0c607bb00229e173b22d0f3298d2`. This is an **external checkout hotfix**, not an upstream commit: the public pipeline maintainer must independently integrate the change into their own branch. It fixes unquoted unsafe attributes, rejects SVG data URI exceptions, and restricts hotspot/active-screen learner media to explicitly candidate-visible diagrams. Unknown source changes fail closed.
+
+CI uses `--ci-security-mode` to permit a technically clean staging run with **zero confirmed failures** while keeping unverified real exam and live website gates reported as `BLOCKED_UNVERIFIED`. Never interpret a green staging run as authorization to merge or publish.

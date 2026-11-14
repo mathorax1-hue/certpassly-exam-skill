@@ -185,6 +185,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--ci-security-mode", action="store_true",
+                    help="Exit successfully when there are zero technical failures, but preserve unverified release blockers")
     args = ap.parse_args(argv)
     report = run_audit(args.upstream.resolve())
     report.update({
@@ -201,7 +203,11 @@ def main(argv=None):
     for c in report["checks"]:
         if c["status"] != "pass":
             print("%s %s: %s" % (c["status"].upper(), c["id"], c["detail"]))
-    return 1 if report["gate"] != "PASS_CONTRACT_ONLY" else 0
+    if report["gate"] == "BLOCKED_FAIL":
+        return 1
+    if report["gate"] == "BLOCKED_UNVERIFIED" and not args.ci_security_mode:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
