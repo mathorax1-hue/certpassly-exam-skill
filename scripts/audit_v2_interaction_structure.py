@@ -87,10 +87,10 @@ def audit_one(doc, filename):
             errors.append("missing slots")
         else:
             ids = [x.get("id") for x in slots if isinstance(x, dict)]
-            if len(ids) != len(slots) or len(ids) != len(set(ids)) or not all(ids):
+            if len(ids) != len(slots) or not all(isinstance(i, str) and i for i in ids) or len(ids) != len(set(str(i) for i in ids)):
                 errors.append("duplicate or missing slot IDs")
             used = SLOTS.findall(prompt or "")
-            if sorted(used) != sorted(ids):
+            if sorted(used) != sorted(str(i) for i in ids):
                 errors.append("slot references do not match slot definitions")
             if kind == "inline_dropdown" and len(slots) != 1:
                 errors.append("inline dropdown must have one slot")
