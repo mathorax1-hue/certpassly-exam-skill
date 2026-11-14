@@ -90,6 +90,16 @@ class MediaLayout30TypeTests(unittest.TestCase):
             p.write_text(json.dumps(r), encoding="utf-8")
             self.assertEqual(len(load_type_registry(p)["types"]), 30)
 
+    def test_pinned_registry_rejects_swapped_publishability_flags(self):
+        changed = registry()
+        changed["types"]["single_choice"]["publishable"] = False
+        changed["types"]["multi_select_matrix"]["publishable"] = True
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "modified-registry.json"
+            p.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_type_registry(p)
+
     def test_all_16_publishable_types_have_synthetic_contract(self):
         r = registry()
         for typ in sorted(PUBLISHABLE):
