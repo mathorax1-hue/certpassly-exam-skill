@@ -91,6 +91,18 @@ carry source-PDF SHA/page/xref/rotation/crop, output SHA, source SHA and a
 neutral/interactive/shared role. No answers, selected state or scoring payload
 may enter this contract.
 
+The deterministic `project_upstream_question(...)` adapter consumes the original
+upstream `question_type` / `response_schema.content` contract (for example
+`rows`, `columns`, `blanks`, `left`, `right`, `regions`). **Original
+source facts and clean-media proof must be supplied independently.** It emits
+only a whitelisted media layout and an explicit PASS/BLOCKED verification;
+`answer_key`, `correct_option_ids`, `answer_raw`, selected state and
+explanation fields are never copied into the output. If a dropdown, drag/drop,
+matching or hotspot region lacks independently verified normalized
+coordinates, the adapter blocks instead of fabricating a location. Separate
+30-type synthetic projection tests exercise this path. Source response
+compatibility is not the same as observed site UI compatibility.
+
 Normalized rectangles/polygons are in **0..1 source image coordinates**;
 `css_rect` maps rotations (0/90/180/270), viewport, zoom, and DPR and
 reports the 44-CSS-px touch-target diagnostic. Actual keyboard navigation,
@@ -146,6 +158,7 @@ python -m pip check
 python -m unittest tests.test_builder_b0_marks \
   tests.test_builder_quality_profiles tests.test_media_layout_contract \
   tests.test_media_layout_schema tests.test_media_layout_cli \
+  tests.test_upstream_media_projection \
   tests.test_builder_release_gate -v
 python -m unittest tests.test_media_prep_inventory \
   tests.test_media_prep_quality tests.test_media_prep_privacy \
