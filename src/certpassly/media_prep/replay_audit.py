@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 
 from .config import load_config, verify_source_identity
@@ -131,12 +132,14 @@ def run_private_media_replay(config_path: str, *,
     files=inventory["files"]
     source_qids={qid for qid,q in inventory["questions"].items() if q["usage"]}
     manifest_q={q["question_id"]:q for q in manifest["questions"]}
+    image_qids=source_qids | {qid for qid,qrec in manifest_q.items()
+                             if qrec.get("requires_image")}
     errors=[]; cases=[]
     def issue(qid,reason):
         errors.append({"question_id":qid,"reason":reason})
     if len(files)!=expected_source_assets:
         issue("*","SOURCE_ASSET_COUNT_MISMATCH")
-    if len(source_qids)!=expected_image_questions:
+    if len(image_qids)!=expected_image_questions:
         issue("*","IMAGE_QUESTION_COUNT_MISMATCH")
     if len(manifest_q)!=len(inventory["questions"]):
         issue("*","MANIFEST_QUESTION_COUNT_MISMATCH")
@@ -144,15 +147,26 @@ def run_private_media_replay(config_path: str, *,
         issue("*","ORIGINAL_ASSET_INVENTORY_SET_MISMATCH")
     media_root=Path(cfg["upstream"]["out_dir"])/"media"/"src"
     clean_root=Path(cfg["output"]["clean_dir"])
-    all_image_qids=sorted(source_qids|{qid for q,qrec in manifest_q.items()
-                                      if qrec.get("requires_image")})
+    all_image_qids=sorted(image_qids)
     seen_original=set()
     for qid in all_image_qids:
+        if not re.fullmatch(r"q[0-9]{3,6}", qid):
+            issue("*","UNSAFE_QUESTION_ID")
+            continue
         q=inventory["questions"].get(qid) or {}
         usage=q.get("usage") or []
         question_assets=[u["file"] for u in usage if u.get("role")=="question_image"]
         answer_assets=[u["file"] for u in usage if u.get("role")=="answer_image"]
         case_issues=[]
+        all_source_files=question_assets+answer_assets
+        if any(not isinstance(n,str) or not re.fullmatch(
+                r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)
+               for n in all_source_files):
+            case_issues.append("UNSAFE_SOURCE_IMAGE_FILENAME")
+        display_question_assets=[n for n in question_assets if isinstance(n,str) and
+                                  re.fullmatch(r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
+        display_answer_assets=[n for n in answer_assets if isinstance(n,str) and
+                                re.fullmatch(r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
         for fn in question_assets+answer_assets:
             seen_original.add(fn)
             f=files.get(fn); prev=(stored.get("files") or {}).get(fn)
@@ -207,7 +221,7 @@ def run_private_media_replay(config_path: str, *,
         pages=q.get("pages") or []
         gallery_file=out/f"{qid}.png"
         try:
-            _gallery(cfg["source"]["pdf"],qid,pages,question_assets,answer_assets,
+            _gallery(cfg["source"]["pdf"],qid,pages,display_question_assets,display_answer_assets,
                      clean_path,media_root,gallery_file)
         except Exception as exc:
             case_issues.append("PRIVATE_GALLERY_RENDER_FAILED:"+type(exc).__name__)
@@ -230,7 +244,7 @@ def run_private_media_replay(config_path: str, *,
             "expected_source_assets":expected_source_assets,
             "observed_source_assets":len(files),
             "expected_image_questions":expected_image_questions,
-            "observed_image_questions":len(source_qids),
+            "observed_image_questions":len(image_qids),
             "gallery_count":sum(bool(x["gallery"]) for x in cases),
             "cases":cases,"issues":errors,
             "status":"BLOCKED" if errors else "MACHINE_REPLAY_COMPLETE_HUMAN_PENDING",
