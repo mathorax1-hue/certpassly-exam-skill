@@ -82,7 +82,7 @@ def detect_marks(pil_rgb) -> dict:
 
     Returns a marking summary dict:
       {"detected_mark_boxes": int, "marks": [{x,y,w,h,kind} normalized],
-       "dark_fraction": float, "method": "opencv-connected-components-v4",
+       "dark_fraction": float, "method": "opencv-connected-components-v5",
        "note": "..."}
     Coordinates are normalized to [0,1].
     """
@@ -152,7 +152,7 @@ def detect_marks(pil_rgb) -> dict:
     # B2: selected color UI states can be brighter than the grayscale floor.
     # A blue filled radio (e.g. RGB 20,104,207) has intensity above the
     # dark-mask threshold, so the former detector returned ZERO marks.
-    # Search saturated, compact and *filled* connected components separately.
+    # Search saturated filled controls, hollow selection rings and highlight bars separately.
     # A gray/white hollow radio or dropdown border does not meet this test.
     # A similar-looking colored chart dot is intentionally AMBIGUOUS and
     # blocked rather than mislabeled a proven clean learner answer area.
@@ -162,9 +162,23 @@ def detect_marks(pil_rgb) -> dict:
         area = int(sub.sum())
         fill = area / float(w * h)
         ratio = w / float(h)
-        if not (8 <= w <= 36 and 8 <= h <= 36 and
+        rows_covered, cols_covered = _coverage(sub)
+        hollow = _hollow_core_fraction(sub)
+        kind = None
+        if (8 <= w <= 36 and 8 <= h <= 36 and
                 0.58 <= ratio <= 1.72 and fill >= 0.58 and
                 area >= 40 and w / float(W) <= 0.08 and h / float(H) <= 0.08):
+            kind = "filled_chromatic_control"
+        elif (w >= 24 and h >= 16 and area >= 55 and
+              rows_covered >= 0.8 and cols_covered >= 0.8 and
+              0.02 <= fill <= 0.56 and hollow >= 0.5 and
+              w / float(W) <= 0.65 and h / float(H) <= 0.50):
+            kind = "chromatic_pen_ring_or_box"
+        elif (w >= 40 and h >= 8 and ratio >= 2.5 and
+              area >= 0.0008 * W * H and fill >= 0.65 and
+              w / float(W) <= 0.8 and h / float(H) <= 0.2):
+            kind = "chromatic_highlight_bar"
+        if kind is None:
             continue
         # The dark detector may have caught the same colored component.
         # Avoid inflating a mark count without losing the fail-closed result.
@@ -177,7 +191,7 @@ def detect_marks(pil_rgb) -> dict:
         marks.append({
             "x": round(x / W, 4), "y": round(y / H, 4),
             "w": round(w / W, 4), "h": round(h / H, 4),
-            "kind": "filled_chromatic_control", "px": [x, y, w, h],
+            "kind": kind, "px": [x, y, w, h],
         })
 
     # Deterministic order (top-left first) regardless of component numbering.
@@ -188,7 +202,7 @@ def detect_marks(pil_rgb) -> dict:
         "dark_fraction": round(dark_fraction, 6),
         "method": "opencv-connected-components-v4",
         "note": ("advisory machine detection of pen-like selection marks "
-                 "(dark/colored hollow shapes, colored filled controls, solid strokes, pen dots); "
+                 "(dark/colored hollow shapes, colored filled controls/rings/highlights, solid strokes, pen dots); "
                  "never used to erase or reconstruct content; a detection "
                  "refuses learner eligibility, it does not clean anything; "
                  "heavy blur can fade marks below the dark threshold - the "
