@@ -56,3 +56,37 @@ python -m unittest tests/test_audit_v2_interaction_structure.py -v
 A zero-error automated interaction inventory is necessary but not sufficient:
 browser rendering, accessibility, original source comparison, server-side answer
 separation and the actual website importer still require separate verification.
+
+## Private PDF text evidence (source-check assistance, not fidelity approval)
+
+For flagged questions with recorded PDF page numbers, the tool
+`scripts/audit_private_pdf_text_evidence.py` reads the PDF text layer and
+uses OCR only when the page text layer is sparse. It compares significant
+tokens from the archived structured learner content with those pages.
+No screenshot is emitted to the simulator. The report keeps page number,
+PDF/OCR method, overlap statistics and a small unmatched-token sample.
+
+```bash
+python scripts/audit_private_pdf_text_evidence.py \
+  --pdf "/private/raw/exams/AB-900/source/AB-900 (89 Questions).pdf" \
+  --questions "/private/raw/exams/AB-900/research-archive/AB-900-package/AB-900-package/AB-900/questions.json" \
+  --cannot-convert "/private/raw/exams/AB-900/technical-v2-pilot/cannot-convert.json" \
+  --output "/private/raw/exams/AB-900/technical-v2-pilot/pdf-source-text-evidence.json"
+```
+
+Requires `pdftotext`, `pdftoppm` and, for OCR fallback, `tesseract`.
+Retain the output only in the private exam repository. This is a weak
+machine-generated text-evidence signal; **never** clear a question's source
+review flag solely because a high proportion of words matched. Verify
+all cells, choices, full question instructions, diagrams, and interaction
+semantics directly against the original PDF.
+
+## Documented source replacements
+
+Use `--archive-question-bank /private/.../questions.json` with the
+`audit_pilot_source_fidelity.py` command to classify explicit
+`owner_question_replaced` + `SUPERSEDED` + `original_editorial_id`
+metadata as documented original CertPassly editorial replacements.
+An authored replacement does not need to match the PDF question it
+superseded. Neither the replacement provenance nor passing schema
+checks constitutes factual answer approval.
