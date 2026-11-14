@@ -132,6 +132,17 @@
       "release_authority": false
     },
     {
+      "id": "media_prep_interaction_geometry_audit",
+      "path": "src/certpassly/media_prep/interaction_audit.py",
+      "test": "tests/test_interaction_audit.py",
+      "command": "python -m unittest tests.test_interaction_audit -v; API audit_interaction_geometry(layout, original_native_width, original_native_height)",
+      "dependencies": "Python >=3.11 stdlib; source media-layout-v1 and original native image dimensions established externally",
+      "side_effects": "Read-only deterministic mobile/desktop/zoom/DPR target-size and overlap audit; cannot simulate site CSS/JS or certify keyboard interactions, and grants no approval",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "media_prep_privacy_gate",
       "path": "src/certpassly/media_prep/privacy_gate.py",
       "test": "tests/test_builder_release_gate.py",
