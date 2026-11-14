@@ -47,7 +47,7 @@ def _private_target(cfg, folder: str) -> Path:
 
 def _safe_clean_file(root: Path, filename: str) -> Path:
     if (not isinstance(filename,str) or not filename or
-        "\" in filename or "/" in filename or ":" in filename or
+        "\\" in filename or "/" in filename or ":" in filename or
         filename.startswith(".") or PurePosixPath(filename).suffix.lower() not in
         (".png",".jpg",".jpeg",".webp")):
         raise OperationalError("clean candidate must be one safe local filename")
