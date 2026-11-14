@@ -234,9 +234,13 @@ committed to any public GitHub repository or sent to a public CI runner.
 Exit 0 means the **machine-only** replay emitted complete evidence with
 no detected issues, NOT that Z.ai inspected the screenshots or that an
 exam is releasable; exit 2 is BLOCKED, exit 1 operational.
-The full independent PDF/image replay has **not** been executed by the
-builder against the original LFS source. The mandatory public CI uses
-synthetically generated PDF/images only.
+A bounded PRIVATE replay has been run on original owner-supplied LFS PDFs
+using the exact tool pin; this repository contains no private source inputs
+or reports. For current source-specific receipts and blockers consult
+authorized private `raw-exam` review records, not public CI. The public
+CI still uses **only synthetic fixtures**. Machine-success receipts do NOT
+constitute independent visual approval, verified answer correctness or
+website importer acceptance.
 
 Any uncertainty, unsupported type, marked content, private source missing
 or untested site contract remains **BLOCKED**. Original 35 image candidates,
@@ -252,3 +256,16 @@ source manifests, private contact sheets and progress records belong in
 checkpoints, never overwrite the >3 MB canonical conversation master with
 a partial reconstruction. Source-fidelity gates must remain independent
 from automated score, quality and formal schema gates.
+
+## Additional source-confirmed hardening (code-only)
+- `test_real_bug_ui_chrome_regression.py`: structural menu chrome versus
+  drawn answer outlines; colored app icons versus genuinely selected radio
+  and checkbox controls (synthetic generated pixels only)
+- `MULTI_EXHIBIT_MAPPING_REQUIRED`: when more than one independently
+  verified-clean question image is required, a single-image learner package
+  would be incomplete. Until the site importer and signed media manifest
+  support an ORDERED multiple-image array, **block the whole question**.
+- No original PDF or image content is included in this public record.
+- Authentic low-resolution images, flattened answer marks with no clean
+  counterpart, and unverifiable exact crops remain blocked; neither an
+  artificial upscale nor AI reconstruction is an authentic fix.
