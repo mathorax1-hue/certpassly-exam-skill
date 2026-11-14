@@ -210,6 +210,8 @@ def validate_layout(layout: dict, registry: dict, *, for_learner=True) -> dict:
         errors.append("controls must be an object")
         controls = {}
     family = meta.get("family")
+    if typ == "image_based_choice" and not media:
+        errors.append("image_based_choice requires clean source-verified exhibit media")
     if family == "matrix":
         _unique_ids(controls.get("rows"), "rows", errors)
         _unique_ids(controls.get("columns"), "columns", errors)
@@ -279,3 +281,115 @@ def layout_fingerprint(layout):
     raw = json.dumps(layout, sort_keys=True, ensure_ascii=False,
                      separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
+
+
+def project_upstream_question(question: dict, *, source: dict, media: list,
+                              registry: dict, geometry: dict | None = None) -> dict:
+    """B4 safe adapter from the pinned upstream bank response_schema to media-layout.
+
+    Input is the upstream question bank's response_schema.content, plus
+    INDEPENDENTLY VERIFIED source crop/clean media and geometric annotations.
+    NEVER infer geometry from an answer image or trust question.media paths.
+    The upstream bank may have answer_key/marked data, but only explicit
+    safe fields are selected into the learner-facing layout. The whole
+    original bank object is NEVER serialized into media-layout.
+    Missing coordinates block the layout instead of guessing.
+    """
+    if not isinstance(question, dict):
+        raise ValueError("question must be a mapping")
+    response = question.get("response_schema") or {}
+    if not isinstance(response, dict):
+        raise ValueError("question.response_schema must be a mapping")
+    typ = question.get("question_type") or response.get("type")
+    if (question.get("question_type") and response.get("type") and
+            question["question_type"] != response["type"]):
+        raise ValueError("question_type and response_schema.type disagree")
+    if not isinstance(typ, str) or typ not in registry.get("types", {}):
+        raise ValueError("unsupported question type, no silent downgrade")
+    content = response.get("content") or {}
+    if not isinstance(content, dict):
+        raise ValueError("response_schema.content must be a mapping")
+    geometry = geometry or {}
+    if not isinstance(geometry, dict):
+        raise ValueError("geometry must be a mapping")
+    # The caller must supply original-source facts and clean-media proof from
+    # its private manifest; never take a learner asset from answer_images.
+    if not isinstance(source, dict) or not isinstance(media, list):
+        raise ValueError("source and clean-media records are required")
+    allowed_source = ("pdf_sha256", "page", "rotation_deg", "crop", "xref")
+    allowed_media = ("file", "role", "sha256", "source_sha256",
+                     "source_page", "source_xref", "shared_stimulus_id")
+    src = {k: source[k] for k in allowed_source if k in source}
+    safe_media = [{k: m[k] for k in allowed_media if k in m}
+                  for m in media if isinstance(m, dict)]
+    if len(safe_media) != len(media):
+        raise ValueError("invalid media record")
+    qid = question.get("question_key") or question.get("question_id")
+    layout = {"schema_version": "media-layout-v1",
+              "question_id": qid, "type_key": typ,
+              "source": src, "media": safe_media, "controls": {}}
+    family = registry["types"][typ].get("family")
+
+    def safe_ids(raw):
+        """Copy an upstream label/id, but never an answer or scoring field."""
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            # upstream ids are preserved exactly (no index-based reordering)
+            rec = {k: item[k] for k in ("id",) if k in item}
+            if isinstance(item.get("text"), str):
+                rec["label"] = item["text"]
+            elif isinstance(item.get("label"), str):
+                rec["label"] = item["label"]
+            out.append(rec)
+        return out
+
+    def with_rect(items, slot_name):
+        where = geometry.get(slot_name) or {}
+        if not isinstance(where, dict):
+            raise ValueError(f"geometry.{slot_name} must map stable IDs to regions")
+        for rec in items:
+            identity = rec.get("id")
+            shape = where.get(identity)
+            if isinstance(shape, dict):
+                if "rect" in shape:
+                    rec["rect"] = shape["rect"]
+                if "polygon" in shape:
+                    rec["polygon"] = shape["polygon"]
+            elif shape is not None:
+                rec["rect"] = shape
+        return items
+
+    if family == "matrix":
+        layout["controls"]["rows"] = safe_ids(content.get("rows"))
+        layout["controls"]["columns"] = safe_ids(content.get("columns"))
+    elif family == "cloze":
+        layout["controls"]["blanks"] = with_rect(safe_ids(content.get("blanks")), "blanks")
+    elif family == "sequence":
+        layout["controls"]["items"] = safe_ids(content.get("items"))
+    elif family in ("association", "interaction"):
+        layout["controls"]["draggable_items"] = safe_ids(
+            content.get("left") or content.get("items"))
+        layout["controls"]["drop_zones"] = with_rect(
+            safe_ids(content.get("right") or content.get("bins") or content.get("zones")),
+            "drop_zones")
+    elif family == "image_regions":
+        regions = safe_ids(content.get("regions"))
+        # original upstream content.regions may include normalized_coordinates.
+        for rec, item in zip(regions, content.get("regions") or []):
+            if "normalized_coordinates" in item:
+                rec["rect"] = item["normalized_coordinates"]
+        layout["controls"]["hotspots"] = with_rect(regions, "hotspots")
+    elif family == "container":
+        if isinstance(question.get("shared_stimulus_id"), str):
+            layout["shared_stimulus_id"] = question["shared_stimulus_id"]
+        if isinstance(question.get("child_question_ids"), list):
+            layout["child_question_ids"] = question["child_question_ids"]
+    result = validate_layout(layout, registry)
+    # Never mark a layout as UI-rendered, reviewer-signed or release ready.
+    return {"layout": layout, "verification": result,
+            "provenance": "upstream_response_schema_plus_verified_media_only",
+            "site_ui_status": "UNTESTED"}
