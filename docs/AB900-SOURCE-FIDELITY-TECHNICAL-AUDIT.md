@@ -38,3 +38,21 @@ python -m unittest tests/test_audit_pilot_source_fidelity.py -v
 ## Boundaries
 
 No live import, main-branch merge, editorial approval, answer research, release promotion or publication. Keep evidence and exact question text in `raw-exam`; keep only generic code and synthetic fixtures in `certpassly-exam-skill`.
+
+## Additional interaction checker
+
+The reusable command below checks every V2 draft's learner payload, type-specific
+choice/dropdown/matrix structure, slot-marker correspondence, unsafe HTML
+patterns, and possible private answer-media exposure. It creates a technical
+inventory in the private pilot directory without altering keys or source text.
+
+```bash
+python scripts/audit_v2_interaction_structure.py \
+  --v2-dir /private/raw/exams/AB-900/technical-v2-pilot/question-v2 \
+  --output /private/raw/exams/AB-900/technical-v2-pilot/interaction-structure-audit.json
+python -m unittest tests/test_audit_v2_interaction_structure.py -v
+```
+
+A zero-error automated interaction inventory is necessary but not sufficient:
+browser rendering, accessibility, original source comparison, server-side answer
+separation and the actual website importer still require separate verification.
