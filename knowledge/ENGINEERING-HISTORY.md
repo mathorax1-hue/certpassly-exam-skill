@@ -231,6 +231,6 @@ private `reports/pipeline-pilot/AB-730/tech-only/media-prep/` rerun - the previo
 marked and no vector exhibit lies inside its verified band), all learner renders are
 exact crops, and the quarantined pre-correction outputs are retained separately.
 
-**Verified:** 86/86 media-prep synthetic tests OK (25 inventory + 10 quality + 22
+**Verified:** 87/87 media-prep synthetic tests OK (26 inventory + 10 quality + 22
 privacy + 16 e2e + 13 cli) plus 247 pre-existing repo tests; real pinned-upstream
 integration OK; whole-repo discover 333/333 OK. Deterministic double-run byte-identical.

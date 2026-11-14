@@ -22,7 +22,7 @@ CERTPASSLY_UPSTREAM_SCRIPTS=/tmp/upstream/scripts \
 
 Without image extras installed the media-prep tests SKIP (never silently pass); the media-prep CI job installs the extras and FAILS if any of them was skipped.
 
-## Matrix A — source/processing (order requires ≥12; 25 executed)
+## Matrix A — source/processing (order requires ≥12; 26 executed)
 
 `tests/test_media_prep_inventory.py` — `ProcessingMatrixTests` (a01–a19) + `MarkDetectorUnitTests` (7):
 
@@ -73,11 +73,11 @@ Run with Python 3.12.16, PyMuPDF 1.26.7, Pillow 11.3.0, numpy 2.1.3, opencv-pyth
 
 | Suite | Tests | Result |
 | --- | --- | --- |
-| tests.test_media_prep_inventory | 25 | OK |
+| tests.test_media_prep_inventory | 26 | OK |
 | tests.test_media_prep_quality | 10 | OK |
 | tests.test_media_prep_privacy | 22 | OK |
 | tests.test_media_prep_e2e | 16 (2 skipped without env) / 16 OK with `CERTPASSLY_UPSTREAM_SCRIPTS` | OK |
 | tests.test_media_prep_cli | 13 | OK |
-| media-prep total | **86** (all executed; 2 env-gated integration tests additionally verified locally with the real pinned checkout) | **OK** |
+| media-prep total | **87** (all executed; 2 env-gated integration tests additionally verified locally with the real pinned checkout) | **OK** |
 
 Determinism: `test_d07_repeat_run_byte_identical` proves a full second `prepare` reproduces byte-identical manifest and image files. The CI job re-runs the whole matrix on every push/PR.
