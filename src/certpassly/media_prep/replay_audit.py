@@ -160,13 +160,13 @@ def run_private_media_replay(config_path: str, *,
         case_issues=[]
         all_source_files=question_assets+answer_assets
         if any(not isinstance(n,str) or not re.fullmatch(
-                r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)
+                r"[a-zA-Z0-9._-]+\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)
                for n in all_source_files):
             case_issues.append("UNSAFE_SOURCE_IMAGE_FILENAME")
         display_question_assets=[n for n in question_assets if isinstance(n,str) and
-                                  re.fullmatch(r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
+                                  re.fullmatch(r"[a-zA-Z0-9._-]+\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
         display_answer_assets=[n for n in answer_assets if isinstance(n,str) and
-                                re.fullmatch(r"[a-zA-Z0-9._-]+\\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
+                                re.fullmatch(r"[a-zA-Z0-9._-]+\.(?:png|jpg|jpeg|webp)",n,re.IGNORECASE)]
         for fn in question_assets+answer_assets:
             seen_original.add(fn)
             f=files.get(fn); prev=(stored.get("files") or {}).get(fn)
