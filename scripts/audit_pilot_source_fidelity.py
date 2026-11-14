@@ -90,13 +90,35 @@ def audit_v2(directory):
     return {"total": len(inventory), "unique": len(set(inventory)),
             "types_not_schema_validated": True, "structural_errors": errors}
 
-def build_report(old, new, v2_dir, blocked_keys, expected=89):
+def documented_replacements(bank):
+    """Trust only explicit archive supersession provenance, not difference detection."""
+    replacements = {}
+    for question in bank.get("questions", []):
+        key = question.get("question_key")
+        if (KEY_RE.fullmatch(str(key or "")) and
+                question.get("owner_question_replaced") == key and
+                "SUPERSEDED" in str(question.get("created_source") or "") and
+                str(question.get("original_editorial_id") or "").strip()):
+            replacements[key] = question["original_editorial_id"]
+    return replacements
+
+def build_report(old, new, v2_dir, blocked_keys, expected=89, replacements=None):
     diffs = compare_split(old, new)
+    replacements = replacements or {}
+    for diff in diffs:
+        if diff["question_key"] in replacements and diff["field"] != "_question":
+            diff["status"] = "documented_original_editorial_replacement"
+            diff["technical_blocked"] = False
+            diff["original_editorial_id"] = replacements[diff["question_key"]]
+            diff["editorial_review_deferred"] = True
     inventory = audit_v2(v2_dir)
     blocked = sorted(set(blocked_keys))
     overlap = sorted(set(d["question_key"] for d in diffs) & set(blocked))
     missing = sorted(set(old) ^ set(new))
     structural = sorted(set(d["question_key"] for d in diffs if d["technical_blocked"]))
+    documented = sorted({d["question_key"] for d in diffs
+                         if d["status"] == "documented_original_editorial_replacement"})
+    unexplained = sorted(set(d["question_key"] for d in diffs) - set(documented))
     review = sorted(set(blocked) | set(structural) |
                     set(e["question_key"] for e in inventory["structural_errors"]))
     return {
@@ -107,6 +129,11 @@ def build_report(old, new, v2_dir, blocked_keys, expected=89):
         "archive_count": len(old), "fresh_count": len(new),
         "diff_question_count": len({d["question_key"] for d in diffs}),
         "diff_field_count": len(diffs), "diffs": diffs,
+        "documented_replacement_question_count": len(documented),
+        "documented_replacement_keys": documented,
+        "unexplained_difference_question_count": len(unexplained),
+        "unexplained_difference_keys": unexplained,
+        "replacement_comparison_note": "Original CertPassly replacements need not match superseded PDF questions. The provenance is archived metadata, not editorial approval.",
         "missing_question_keys": missing,
         "previously_flagged_source_questions": blocked,
         "flagged_and_changed": overlap,
@@ -114,8 +141,8 @@ def build_report(old, new, v2_dir, blocked_keys, expected=89):
         "technical_review_required": review,
         "technical_eligible_all": (len(old) == expected and len(new) == expected and
             inventory["total"] == expected and inventory["unique"] == expected and
-            not review and not missing and not diffs),
-        "status": "BLOCKED_SOURCE_VERIFICATION" if review or missing or diffs or
+            not review and not missing and not unexplained),
+        "status": "BLOCKED_SOURCE_VERIFICATION" if review or missing or unexplained or
             inventory["total"] != expected else "AUTOMATED_CHECKS_ONLY_NOT_SOURCE_APPROVAL",
         "caution": "Hashes localize discrepancies; source PDF page review is mandatory. "
                    "This tool is not schema validation or a website importer test."
@@ -127,13 +154,16 @@ def main():
     p.add_argument("--fresh-split", required=True, type=Path)
     p.add_argument("--v2-dir", required=True, type=Path)
     p.add_argument("--cannot-convert", required=True, type=Path)
+    p.add_argument("--archive-question-bank", type=Path, default=None)
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--expected", type=int, default=89)
     args = p.parse_args()
     cannot = load_json(args.cannot_convert)
     keys = cannot.get("question_keys") or [x["question_key"] for x in cannot.get("items", [])]
+    replacements = documented_replacements(load_json(args.archive_question_bank)) if args.archive_question_bank else {}
     report = build_report(load_json(args.archive_split),
-                          load_json(args.fresh_split), args.v2_dir, keys, args.expected)
+                          load_json(args.fresh_split), args.v2_dir, keys, args.expected,
+                          replacements)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps({k: report[k] for k in ("archive_count", "fresh_count",
