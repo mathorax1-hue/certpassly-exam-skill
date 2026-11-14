@@ -53,13 +53,13 @@ def tokens(text):
     plain = re.sub(r"<[^>]+>", " ", html.unescape(str(text)))
     return {w.lower() for w in WORD.findall(plain) if w.lower() not in SKIP}
 
-def source_page_text(pdf, number, ocr_fallback=True):
+def source_page_text(pdf, number, ocr_fallback=True, force=False):
     p = subprocess.run(["pdftotext", "-f", str(number), "-l", str(number),
                         "-layout", "-enc", "UTF-8", str(pdf), "-"],
                        capture_output=True, text=True, errors="replace")
     if p.returncode != 0:
         return "", "PDF_TEXT_ERROR"
-    if len(tokens(p.stdout)) >= 20 or not ocr_fallback:
+    if (len(tokens(p.stdout)) >= 20 and not force) or not ocr_fallback:
         return p.stdout, "PDF_TEXT_LAYER"
     with tempfile.TemporaryDirectory(prefix="certpassly-pdf-qa-") as folder:
         target = Path(folder) / "source"
@@ -72,7 +72,7 @@ def source_page_text(pdf, number, ocr_fallback=True):
                            capture_output=True, text=True, errors="replace")
         if t.returncode != 0:
             return p.stdout, "PDF_TEXT_NO_OCR_ENGINE_FAILED"
-        return p.stdout + "\n" + t.stdout, "OCR_REFERENCE_ONLY"
+        return p.stdout + "\n" + t.stdout, "PDF_TEXT_PLUS_OCR" if force else "OCR_REFERENCE_ONLY"
 
 def inspect(bank, flagged_keys, pdf, ocr_fallback=True):
     questions = {q["question_key"]: q for q in bank["questions"]}
@@ -106,11 +106,28 @@ def inspect(bank, flagged_keys, pdf, ocr_fallback=True):
         found = sorted(target & source_tokens)
         missing = sorted(target - source_tokens)
         ratio = round(len(found) / len(target), 4) if target else 0.0
+        # An answer-area may be rasterized even when the page has ample text.
+        # Only low-overlap pages get a second, private OCR pass.
+        enhanced = False
+        if ocr_fallback and ratio < 0.8:
+            for n in page_numbers:
+                if evidence_cache[n][1] == "PDF_TEXT_LAYER":
+                    evidence_cache[n] = source_page_text(pdf, n, True, force=True)
+                    enhanced = True
+            if enhanced:
+                page_data = [{"page": n, "method": evidence_cache[n][1],
+                    "text_sha256": hashlib.sha256(evidence_cache[n][0].encode()).hexdigest(),
+                    "token_count": len(tokens(evidence_cache[n][0]))} for n in page_numbers]
+                source_tokens = set().union(*(tokens(evidence_cache[p][0]) for p in page_numbers))
+                found = sorted(target & source_tokens)
+                missing = sorted(target - source_tokens)
+                ratio = round(len(found) / len(target), 4) if target else 0.0
         results.append({"question_key": key, "status": "TEXT_EVIDENCE_ONLY_REVIEW_REQUIRED",
             "source_fidelity_verified": False, "pages": page_data,
             "structured_unique_terms": len(target), "matched_unique_terms": len(found),
             "unmatched_unique_terms": len(missing), "approx_token_recall": ratio,
             "unmatched_terms_sample": missing[:30],
+            "low_overlap_ocr_recheck": enhanced,
             "note": "OCR or text-layer overlap does NOT validate diagram, cell placement, semantics or missing nontext elements."})
     return {"schema": "certpassly.pdf-text-evidence.v1",
             "source_fidelity_independently_verified": False,
