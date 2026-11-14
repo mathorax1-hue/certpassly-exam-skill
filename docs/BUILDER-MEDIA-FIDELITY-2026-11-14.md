@@ -166,8 +166,7 @@ exact pinned upstream **synthetic** extractor separately. Generic public
 
 No learner-ready original AB-730 image has been newly approved by this
 developer branch. Required independent source checks include the actual
-Git LFS `AB-730 (92 Questions).pdf`, **2,213,116 bytes** with owner-pinned
-SHA-256 `e34ce6830b82a8f28133507a9bdc7bc74f022c498875523815c4f9392439994f`;
+Git LFS `AB-730 (92 Questions).pdf`, owner-pinned source byte size and SHA-256 (recorded only in the PRIVATE raw-exam director handover);
 all **44** image-requiring question statuses and **87** original source
 assets, with a private page/source-vs-output-vs-marked contact sheet.
 Specifically re-open q074 page 59, q088 `p-71_1.jpg`, five possible
