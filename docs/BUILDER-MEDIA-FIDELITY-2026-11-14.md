@@ -165,11 +165,10 @@ exact pinned upstream **synthetic** extractor separately. Generic public
 ## B6: independent verification needed on actual private evidence
 
 No learner-ready original AB-730 image has been newly approved by this
-developer branch. Required independent source checks include the actual
-Git LFS `AB-730 (92 Questions).pdf`, owner-pinned source byte size and SHA-256 (recorded only in the PRIVATE raw-exam director handover);
+developer branch. Required independent source checks include the original private Git LFS PDF, owner-pinned source byte size and SHA-256 (recorded only in the PRIVATE raw-exam director handover);
 all **44** image-requiring question statuses and **87** original source
 assets, with a private page/source-vs-output-vs-marked contact sheet.
-Specifically re-open q074 page 59, q088 `p-71_1.jpg`, five possible
+Specifically re-open q074 page 59, the q088 private source selected-state screenshot, five possible
 clean dropdown pairs, low-native-res q035/q059/q078 and mixed widget
 geometry, checking exact source xrefs, roles and output SHA for each.
 A private pass needs original source-hash and artifact readback, real
