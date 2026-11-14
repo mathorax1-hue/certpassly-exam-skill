@@ -13,10 +13,14 @@ What this module does honestly:
     content only, never for an embedded raster (a 400x250 embedded JPEG is
     still 400x250 source pixels no matter the DPI).
 
-Rotation handling: ``page.get_pixmap`` already accounts for /Rotate, so the
-caller passes the rect in UNROTATED page coordinates (the same space
-PyMuPDF's get_image_rects reports) and the renderer produces the visually
-correct upright crop.
+Rotation handling (2026-11-14 P0 correction): PyMuPDF reports text, image
+and drawing geometry in UNROTATED page points, but ``get_pixmap(clip=...)``
+interprets its clip in the ROTATED (display) coordinate system. Passing an
+unrotated rect directly renders the WRONG region on any rotated page. The
+caller still passes the rect in UNROTATED page coordinates (the same space
+get_image_rects reports); this module now maps it through the page's
+rotation matrix before rendering and records BOTH rects plus the page
+rotation, so every crop is visually correct and independently checkable.
 """
 from __future__ import annotations
 
@@ -82,9 +86,12 @@ def page_annotation_report(pdf_path: str, page_number: int) -> dict:
 def render_crop(pdf_path: str, page_number: int, rect, *, dpi=300, annots=False) -> dict:
     """Render one clip region. Returns {"png_bytes": PNG bytes, ...facts}.
 
-    ``rect`` is (x0, y0, x1, y1) in UNROTATED PDF points. ``annots=False``
-    excludes annotation appearances from the render - but that only changes
-    pixels when real annotations exist on the page (recorded honestly).
+    ``rect`` is (x0, y0, x1, y1) in UNROTATED PDF points (the same space as
+    get_text/get_drawings/get_image_rects geometry); it is mapped through the
+    page rotation matrix before ``get_pixmap`` so rotated pages render the
+    visually correct upright region. ``annots=False`` excludes annotation
+    appearances from the render - but that only changes pixels when real
+    annotations exist on the page (recorded honestly).
     """
     fitz = _lazy_fitz()
     doc = fitz.open(pdf_path)
@@ -92,29 +99,48 @@ def render_crop(pdf_path: str, page_number: int, rect, *, dpi=300, annots=False)
         from .errors import OperationalError
         raise OperationalError(f"page {page_number} out of range")
     page = doc[page_number - 1]
-    clip = fitz.Rect(*rect)
-    if clip.is_empty or clip.is_infinite:
+    clip_unrot = fitz.Rect(*rect)
+    if clip_unrot.is_empty or clip_unrot.is_infinite:
         from .errors import OperationalError
         raise OperationalError(f"invalid clip rect: {rect}")
+    rotation = page.rotation or 0
+    if rotation == 0:
+        clip = fitz.Rect(clip_unrot)
+    else:
+        d = clip_unrot * page.rotation_matrix
+        clip = fitz.Rect(min(d.x0, d.x1), min(d.y0, d.y1),
+                         max(d.x0, d.x1), max(d.y0, d.y1))
     pix = page.get_pixmap(dpi=dpi, clip=clip, annots=annots)
     report = page_annotation_report(pdf_path, page_number)
     removal_changed = bool(report["annotations_present"])
+    # annot rects are reported in UNROTATED points (like all PyMuPDF
+    # geometry); map them into the same display space as the clip before the
+    # overlap test so rotated pages report annotations_in_clip correctly
+    if rotation == 0:
+        annot_rects = [fitz.Rect(a["rect"]) for a in report["annotations"]]
+    else:
+        rm = page.rotation_matrix
+        annot_rects = []
+        for a in report["annotations"]:
+            r = fitz.Rect(a["rect"]) * rm
+            annot_rects.append(fitz.Rect(min(r.x0, r.x1), min(r.y0, r.y1),
+                                          max(r.x0, r.x1), max(r.y0, r.y1)))
+    annotations_in_clip = [a for a, r in zip(report["annotations"], annot_rects)
+                           if not (r.x1 < clip.x0 or r.x0 > clip.x1
+                                   or r.y1 < clip.y0 or r.y0 > clip.y1)]
     return {
         "png_bytes": pix.tobytes("png"),
         "width": pix.width,
         "height": pix.height,
         "dpi": dpi,
         "page": page_number,
-        "clip": [round(v, 2) for v in rect],
+        "clip": [round(v, 2) for v in (clip.x0, clip.y0, clip.x1, clip.y1)],
+        "clip_unrotated": [round(v, 2) for v in rect],
+        "page_rotation_deg": rotation,
         "annots_excluded": not annots,
         "annotations_present": report["annotations_present"],
-        "annotations_in_clip": [
-            a for a in report["annotations"]
-            if not (a["rect"][2] < clip.x0 or a["rect"][0] > clip.x1
-                    or a["rect"][3] < clip.y0 or a["rect"][1] > clip.y1)
-        ],
+        "annotations_in_clip": annotations_in_clip,
         "removal_changed_visible_content": removal_changed,
-        "page_rotation_deg": report["page_rotation_deg"],
         "note": ("rendered from original PDF page content; "
                  + ("real annotations were excluded (removal actually changed pixels)"
                     if removal_changed else

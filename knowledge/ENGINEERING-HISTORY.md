@@ -174,3 +174,63 @@ Every future incident or test finding should record:
 **Verified:** 74/74 synthetic tests OK locally (Python 3.12.16, PyMuPDF 1.26.7, Pillow 11.3.0, numpy 2.1.3, opencv-python-headless 4.13.0, jsonschema 4.26.0); real pinned upstream integration OK with `CERTPASSLY_UPSTREAM_SCRIPTS` set; byte-identical prepare reruns. A bounded PRIVATE AB-730 source-only trial (75 pages, 87 images, all /Rotate 90, zero annotations - marks are flattened rasters) ran scan+prepare with real counts in the private raw-exam evidence; no research, no AI authoring, no publication.
 
 **Rule:** a clean learner image is only ever a DIFFERENT provably-unmarked source, the already-clean member of a verified pair, or a self-verified render of original PDF content - never an edited, erased, inpainted or upscaled version of a marked one.
+
+## 2026-11-14 - P0 answer-leak correction (order ZAI-PIPELINE-001-T1-IMG-SKILL-P0)
+
+**Incident (director-proven on real data):** the Priority-B *vector variant* rendered the
+WHOLE PAGE (`clip = tuple(page.rect)`) whenever vector drawings covered >=20% of a page.
+On real AB-730 q074 (page 59) that "clean" learner image visibly contained the tail of
+QUESTION 72 (its `Correct Answer: BC` line), all of QUESTION 73 (stem, options,
+`Correct Answer: AC`) and the start of QUESTION 74. The 86% "vector coverage" was
+near-white background rectangles. One image with visible answer keys is enough to reject
+a dataset; the whole-page fallback is therefore removed, not patched.
+
+**Root causes found and fixed (all in `src/certpassly/media_prep/`):**
+
+1. **No question-bounded geometry** (selection.py). Whole-page render replaced by
+   `exhibit_crop.question_exhibit_crop`: the crop is the union of the question's OWN
+   non-background vector drawings, bounded by its `QUESTION <n>` marker and the next
+   boundary in the EMPIRICALLY detected reading direction (marker order > line stacking >
+   rotation fallback). Background chrome (near-white un-stroked fills >=2% of page,
+   page-wide boxes, annotation appearances) is excluded. Any marker/answer/explanation
+   text intersecting the crop blocks the question (`QUESTION_CROP_UNVERIFIED` /
+   `ANSWER_TEXT_IN_RENDER`, exit 2). No black-out, no pixel erasure.
+2. **Latent rotated-page clip bug** (renderer.py). PyMuPDF reports text/image/drawing
+   geometry in UNROTATED points but `get_pixmap(clip=...)` expects DISPLAY-space rects.
+   Whole-page renders were accidentally correct; any sub-page crop on a rotated page
+   would have rendered the WRONG region. Clips are now mapped through
+   `page.rotation_matrix` and BOTH rects are recorded. Regression: the rotated-90 crop
+   must equal the rotation-0 twin content up to a 90-degree transpose (test d13).
+3. **Gate trusted manifest SHAs over content** (privacy_gate.py). `verify_package` now
+   CONTENT-RE-VERIFIES every allowlisted member against the pinned source PDF: rendered
+   crops re-checked for answer/marker text (whole-page clips categorically refused),
+   raster members re-matched to embedded PDF images (bytes/exact pixels) and re-run
+   through mark detection. A FULLY REGENERATED manifest around a leaky whole-page render
+   or a marked image is refused (tests c16, d14).
+4. **Scoring flags did not fail the library contract** (privacy_gate.py).
+   `verify_package()['passed']` was `not problems` even with
+   `SITE_SCORING_ARCHITECTURE_REVIEW_REQUIRED` flags; only the CLI exited 3. Now
+   `passed = not problems and not flags` and `enforce()` raises on flags too (test c10).
+5. **Manifest trust was self-signed** (manifest.py + privacy_gate.py). `entries_sha256`
+   covered only `questions[]` and was recomputable; `reviewer_only_assets` and `counts`
+   were outside the integrity field. Now: `package_integrity_sha256` over ALL
+   security-critical fields (required by default), an OPTIONAL HMAC-SHA256 receipt keyed
+   by a secret OUTSIDE the package (`privacy.manifest_key_env`), and an OPTIONAL
+   `privacy.source_receipt` binding to the independently pinned exam manifest. No key in
+   public code; no claim of adversarial tamper-evidence from self-declared checksums.
+6. **Fixtures encoded the bug.** The synthetic q008 scenario asserted a whole-page
+   render as eligible - the same failure mode as q074. The fixture now uses realistic
+   marker/stem/exhibit/options/answer flow; new scenarios reproduce the exact q074
+   page shape (multi-question page with visible answer tails -> q015), the rotation
+   twin (q014), an unboundable band (q016 -> QUESTION_CROP_UNVERIFIED) and a missing
+   source_number (q017 -> QUESTION_CROP_UNVERIFIED).
+
+**Real-data outcome (private raw-exam evidence, regenerated end to end):** see the
+private `reports/pipeline-pilot/AB-730/tech-only/media-prep/` rerun - the previously
+"clean" q074 is now BLOCKED (its only unmarked source does not exist: the raster is
+marked and no vector exhibit lies inside its verified band), all learner renders are
+exact crops, and the quarantined pre-correction outputs are retained separately.
+
+**Verified:** 86/86 media-prep synthetic tests OK (25 inventory + 10 quality + 22
+privacy + 16 e2e + 13 cli) plus 247 pre-existing repo tests; real pinned-upstream
+integration OK; whole-repo discover 333/333 OK. Deterministic double-run byte-identical.

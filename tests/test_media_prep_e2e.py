@@ -51,9 +51,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(rc, 2, "blocked questions must give exit 2")
         doc = json.load(open(os.path.join(self.root, "readiness.json")))
         self.assertEqual(doc["schema_version"], "image-readiness-v1")
-        self.assertEqual(doc["counts"]["questions_total"], 13)
-        self.assertEqual(doc["counts"]["blocked"], 7)
-        self.assertEqual(len(doc["counts"]["blocked_question_ids"]), 7)
+        self.assertEqual(doc["counts"]["questions_total"], 17)
+        self.assertEqual(doc["counts"]["blocked"], 9)
+        self.assertEqual(len(doc["counts"]["blocked_question_ids"]), 9)
 
     def test_d02_prepare_writes_manifest_and_clean_files(self):
         rc = self._run("prepare", "--config", self.facts["config"])
@@ -61,10 +61,11 @@ class EndToEndTests(unittest.TestCase):
         mpath = os.path.join(self.root, "ws", "prepared", "image-manifest.json")
         m = json.load(open(mpath))
         self.assertEqual(m["schema_version"], "image-manifest-v1")
-        self.assertEqual(m["counts"]["clean_files_written"], 5)
+        self.assertEqual(m["counts"]["clean_files_written"], 7)
         clean_dir = os.path.join(self.root, "ws", "prepared", "clean")
         files = sorted(os.listdir(clean_dir))
-        self.assertEqual(files, ["q002.png", "q005.png", "q007.png", "q008.png", "q012.png"])
+        self.assertEqual(files, ["q002.png", "q005.png", "q007.png", "q008.png",
+                                 "q012.png", "q014.png", "q015.png"])
 
     def test_d03_manifest_schema_valid(self):
         import jsonschema
@@ -222,6 +223,147 @@ class EndToEndTests(unittest.TestCase):
                                         "image-manifest.json")))
         self.assertEqual(m["integrity"]["entries_sha256"],
                          entries_hash(m["questions"]))
+
+    def test_d12_q074_regression_multi_question_page_exact_crop(self):
+        """THE P0 REGRESSION (real AB-730 q074, page 59): the q015 page
+        visibly carries the PREVIOUS question's 'Correct Answer:' +
+        Explanation tail and q015's own 'Correct Answer:' line, plus the
+        NEXT question's marker. The old whole-page fallback rendered all of
+        it into a 'clean' learner image; the engine must now produce ONLY
+        an exact, source-verified exhibit crop that intersects NEITHER
+        answer line NOR any marker, and the crop must not be the page."""
+        import fitz
+        from certpassly.media_prep import exhibit_crop
+        cfg_dir = os.path.dirname(self.facts["config"])
+        pdf = os.path.join(cfg_dir, "synthetic-exam.pdf")
+        doc = fitz.open(pdf)
+        page = doc[14]  # page 15 (1-based): the multi-question regression page
+
+        m = json.load(open(os.path.join(self.root, "ws", "prepared",
+                                        "image-manifest.json")))
+        e15 = next(e for e in m["questions"] if e["question_id"] == "q015")
+        self.assertTrue(e15["is_learner_eligible"])
+        cand = e15["clean_candidate"]
+        self.assertEqual(cand["method"], "priority_b_annotation_free_render")
+        render = cand["render"]
+
+        # the crop must NOT be the whole page (the old bug)
+        pr = page.rect
+        clip = fitz.Rect(*render["clip"])
+        self.assertLess(clip.width, 0.98 * pr.width)
+        self.assertLess(clip.height, 0.98 * pr.height)
+        self.assertLess(abs(fitz.Rect(*render["clip_unrotated"])) / abs(page.rect), 0.60)
+
+        # the crop region must intersect NO marker and NO answer line
+        verdict = exhibit_crop.verify_render_clip(pdf, render["page"],
+                                                  render["clip"],
+                                                  render.get("source_number") or 15)
+        self.assertEqual(verdict["status"], exhibit_crop.CROP_OK,
+                         f"crop re-verification failed: {verdict}")
+
+        # and the exact same page, asked for a WHOLE-PAGE render, must be
+        # refused (the old behavior is now categorically blocked)
+        whole = exhibit_crop.display_clip(page, (0, 0, 612, 792))
+        v2 = exhibit_crop.verify_render_clip(pdf, 15, whole, 15)
+        self.assertIn(v2["status"],
+                      (exhibit_crop.CROP_UNVERIFIED, exhibit_crop.CROP_ANSWER_TEXT))
+
+    def test_d13_rotated_page_crop_matches_unrotated_twin(self):
+        """Rotation regression (latent bug fixed 2026-11-14): get_pixmap
+        clips are DISPLAY-space. The q014 (/Rotate 90) exhibit crop must
+        render the same pixels as the same content on a rotation-0 twin
+        page (up to a 90-degree transpose), proving the crop geometry, not
+        a lucky whole-page render."""
+        import io
+        import numpy as np
+        from PIL import Image
+        import fitz
+        from certpassly.media_prep.renderer import render_crop
+        from media_prep_fixture import build_pdf
+        cfg_dir = os.path.dirname(self.facts["config"])
+        pdf = os.path.join(cfg_dir, "synthetic-exam.pdf")
+
+        # q014's crop from the real fixture (rotated page)
+        rotated = render_crop(pdf, 14, (40, 120, 570, 400), dpi=100, annots=False)
+        # the same layout on a rotation-0 twin page
+        twin_path = os.path.join(self.root, "twin.pdf")
+        build_pdf(twin_path, pages_spec=[{
+            "text": [(60, 60, ["QUESTION 14",
+                               "Synthetic stem 14. Review the following exhibit and answer."]),
+                     (60, 460, ["A. Synthetic option A", "B. Synthetic option B",
+                                "Correct Answer: A"])],
+            "vector_table": {"x0": 40, "y0": 120, "x1": 570, "y1": 400, "rows": 6}}])
+        twin = render_crop(twin_path, 1, (40, 120, 570, 400), dpi=100, annots=False)
+
+        a = np.asarray(Image.open(io.BytesIO(rotated["png_bytes"])).convert("L"), dtype=int)
+        b = np.asarray(Image.open(io.BytesIO(twin["png_bytes"])).convert("L"), dtype=int)
+        # the /Rotate 90 page's display crop is the TRANSPOSITION of the
+        # rotation-0 twin's crop (same content, rotated for display)
+        self.assertEqual(tuple(reversed(a.shape)), b.shape,
+                         "rotated crop must be the transposed twin crop")
+        # the rotated page's display render equals the twin rotated by 90 deg
+        diff = None
+        for k in (1, 3):
+            br = np.rot90(b, k=k)
+            if br.shape == a.shape:
+                d = float(np.abs(br - a).mean())
+                diff = d if diff is None else min(diff, d)
+                if d < 1.0:
+                    break
+        self.assertIsNotNone(diff, "90-degree transpose must be shape-compatible")
+        self.assertLess(diff, 1.0,
+                        f"rotated-page crop must equal the twin's content "
+                        f"(mean abs diff {diff:.3f})")
+
+    def test_d14_adversarial_regenerated_manifest_refuses_leaky_render(self):
+        """A FULLY regenerated manifest (all hashes correctly recomputed)
+        wrapped around a leaky whole-page render must still be refused by
+        the gate's pinned-source CONTENT re-verification."""
+        from certpassly.media_prep import imageio
+        from certpassly.media_prep.manifest import (package_integrity_hash,
+                                                    entries_hash as eh)
+        from certpassly.media_prep.privacy_gate import verify_package
+        from certpassly.media_prep.renderer import render_crop
+        cfg_dir = os.path.dirname(self.facts["config"])
+        pdf = os.path.join(cfg_dir, "synthetic-exam.pdf")
+        mpath = os.path.join(self.root, "ws", "prepared", "image-manifest.json")
+        clean_dir = os.path.join(self.root, "ws", "prepared", "clean")
+        manifest = json.load(open(mpath))
+
+        leaky = render_crop(pdf, 15, (0, 0, 612, 792), dpi=150, annots=False)
+        leaky_sha = imageio.sha256_bytes(leaky["png_bytes"])
+        attack = json.loads(json.dumps(manifest))
+        e15 = next(e for e in attack["questions"] if e["question_id"] == "q015")
+        e15["clean_candidate"]["sha256"] = leaky_sha
+        e15["clean_candidate"]["bytes"] = len(leaky["png_bytes"])
+        e15["clean_candidate"]["render"]["clip"] = [0, 0, 792, 612]
+        e15["clean_candidate"]["render"]["clip_unrotated"] = [0, 0, 612, 792]
+        attack["integrity"]["entries_sha256"] = eh(attack["questions"])
+        attack["integrity"]["package_integrity_sha256"] = package_integrity_hash(attack)
+        attack_path = os.path.join(self.root, "attack-manifest.json")
+        json.dump(attack, open(attack_path, "w"), indent=1)
+
+        pkg = os.path.join(self.root, "attack.zip")
+        with zipfile.ZipFile(pkg, "w") as z:
+            for e in attack["questions"]:
+                c = e.get("clean_candidate") or {}
+                if e["is_learner_eligible"] and c.get("file"):
+                    if c["file"] == "q015.png":
+                        z.writestr(f"media/{c['file']}", leaky["png_bytes"])
+                    else:
+                        z.write(os.path.join(clean_dir, c["file"]),
+                                f"media/{c['file']}")
+            z.writestr("import/questions.json", json.dumps(
+                {"questions": [{"id": "q015",
+                                "content": {"image_url": "media/q015.png"}}]}))
+        report = verify_package(attack_path, pkg, source_pdf=pdf)
+        self.assertFalse(report["passed"],
+                         "the gate MUST refuse a regenerated manifest wrapped "
+                         "around a leaky whole-page render")
+        reasons = {p["reason"] for p in report["problems"]}
+        self.assertTrue(reasons & {"ANSWER_TEXT_IN_RENDER",
+                                   "QUESTION_CROP_UNVERIFIED"},
+                        f"expected a crop/answer refusal, got {reasons}")
 
 
 @unittest.skipUnless(HAS_IMAGE_DEPS, "image extras not installed")

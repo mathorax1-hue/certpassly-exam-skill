@@ -34,12 +34,19 @@ R_SOURCE_IMAGE_TINY = "SOURCE_IMAGE_TINY"
 R_SOURCE_IMAGE_ASPECT_EXTREME = "SOURCE_IMAGE_ASPECT_EXTREME"
 R_SOURCE_SHA_MISMATCH = "SOURCE_ASSET_SHA_MISMATCH"
 R_SOURCE_IMAGE_CORRUPT = "SOURCE_IMAGE_CORRUPT"
+# 2026-11-14 P0 security correction (director audit: real AB-730 q074
+# whole-page render exposed neighbouring questions' Correct Answer lines).
+# Whole-page renders are never learner images; a learner render must be an
+# exact, source-verified question/exhibit crop with zero answer/marker text.
+R_QUESTION_CROP_UNVERIFIED = "QUESTION_CROP_UNVERIFIED"
+R_ANSWER_TEXT_IN_RENDER = "ANSWER_TEXT_IN_RENDER"
 BLOCK_REASONS = (R_CLEAN_ASSET_MISSING, R_MARKED_ONLY_REVIEW_REQUIRED,
                  R_SOURCE_IMAGE_LOW_RESOLUTION, R_SOURCE_IMAGE_AMBIGUOUS,
                  R_SOURCE_IMAGE_BLURRY, R_SOURCE_IMAGE_LOW_CONTRAST,
                  R_SOURCE_IMAGE_CLIPPED, R_SOURCE_IMAGE_TINY,
                  R_SOURCE_IMAGE_ASPECT_EXTREME, R_SOURCE_SHA_MISMATCH,
-                 R_SOURCE_IMAGE_CORRUPT)
+                 R_SOURCE_IMAGE_CORRUPT, R_QUESTION_CROP_UNVERIFIED,
+                 R_ANSWER_TEXT_IN_RENDER)
 
 
 def decision_record(*, source_file, source_sha256, source_bytes, page, xref,

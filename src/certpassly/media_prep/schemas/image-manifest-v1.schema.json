@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mathorax1-hue/certpassly-exam-skill/raw/main/src/certpassly/media_prep/schemas/image-manifest-v1.schema.json",
   "title": "CertPassly clean-image manifest v1 (prepare output)",
-  "description": "Tamper-evident manifest emitted by certpassly.media_prep prepare. integrity.entries_sha256 is the SHA-256 of the canonical JSON (sort_keys) of the questions array; verify-package recomputes it and refuses (exit 3) on any mismatch.",
+  "description": "Tamper-evident manifest emitted by certpassly.media_prep prepare. integrity.entries_sha256 is the legacy partial digest (questions array); integrity.package_integrity_sha256 covers ALL security-critical fields (questions, reviewer_only_assets, counts, exam identity, pins) and verify-package recomputes both, refusing (exit 3) on any mismatch. integrity.receipt_sha256_hmac is the optional HMAC-SHA256 receipt keyed by a secret held OUTSIDE the package; when privacy.require_receipt is true it must validate. Self-declared digests are complemented by pinned-source CONTENT re-verification of every allowlisted member, so a fully regenerated manifest around a leaky or marked image is still refused.",
   "type": "object",
   "required": [
     "schema_version",
@@ -61,7 +61,19 @@
               "height": { "type": "integer", "minimum": 1 },
               "source_file": { "type": "string" },
               "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "quality": { "type": "object" }
+              "quality": { "type": "object" },
+              "render": {
+                "type": "object",
+                "description": "Exact render geometry (P0 correction) so the privacy gate can re-verify the crop against the pinned source PDF",
+                "properties": {
+                  "page": { "type": "integer", "minimum": 1 },
+                  "clip": { "type": "array", "items": { "type": "number" } },
+                  "clip_unrotated": { "type": "array", "items": { "type": "number" } },
+                  "dpi": { "type": "integer", "minimum": 1 },
+                  "page_rotation_deg": { "type": "integer" },
+                  "source_number": { "type": ["integer", "null"] }
+                }
+              }
             }
           },
           "is_learner_eligible": { "type": "boolean" },
@@ -102,10 +114,15 @@
     },
     "integrity": {
       "type": "object",
-      "required": ["entries_sha256", "algorithm"],
+      "required": ["entries_sha256", "package_integrity_sha256", "algorithm"],
       "properties": {
         "entries_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "algorithm": { "type": "string" }
+        "algorithm_entries": { "type": "string" },
+        "package_integrity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "algorithm": { "type": "string" },
+        "receipt_sha256_hmac": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "receipt_key_id": { "type": "string" },
+        "receipt_algorithm": { "type": "string" }
       }
     }
   }

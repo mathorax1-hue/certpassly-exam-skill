@@ -17,8 +17,21 @@ Required structure (see schemas/media-prep-config-v1.schema.json):
                "manifest": "...", "inventory": "..."},
     "display": {"default_css_width": 640, "pixel_density_goal": 2.0},
     "quality_profiles": {"diagram": {...}, "screenshot": {...}},   # optional
-    "privacy": {"allow_external_urls": false, "allowed_hosts": []}
+    "privacy": {"allow_external_urls": false, "allowed_hosts": [],
+                "require_package_integrity": true,     # refuse legacy manifests
+                "require_receipt": false,               # require HMAC receipt
+                "manifest_key_env": "CERTPASSLY_MANIFEST_KEY",
+                "source_receipt": "../exams/AB-730/manifest.json"}  # optional
   }
+
+The ``privacy`` keys after ``allowed_hosts`` are the 2026-11-14 P0 trust
+hardening: ``require_package_integrity`` (default true) refuses manifests
+without a valid package-integrity digest over ALL security-critical fields;
+``require_receipt`` (default false) additionally demands a valid HMAC
+receipt keyed by a secret read from the ``manifest_key_env`` environment
+variable (the key NEVER lives in code or the package); ``source_receipt``
+optionally binds the manifest's source PDF identity to an independently
+pinned exam manifest file.
 """
 from __future__ import annotations
 
@@ -164,6 +177,24 @@ def load_config(path: str) -> dict:
     hosts = priv.get("allowed_hosts", [])
     if not isinstance(hosts, list) or not all(isinstance(h, str) for h in hosts):
         raise ConfigError("privacy.allowed_hosts must be a list of strings")
+    # --- 2026-11-14 P0 correction: manifest trust hardening -------------
+    require_pkg_integrity = priv.get("require_package_integrity", True)
+    if not isinstance(require_pkg_integrity, bool):
+        raise ConfigError("privacy.require_package_integrity must be a boolean")
+    require_receipt = priv.get("require_receipt", False)
+    if not isinstance(require_receipt, bool):
+        raise ConfigError("privacy.require_receipt must be a boolean")
+    key_env = priv.get("manifest_key_env", "CERTPASSLY_MANIFEST_KEY")
+    if not isinstance(key_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key_env):
+        raise ConfigError("privacy.manifest_key_env must be an environment "
+                          "variable name (letters, digits, underscores)")
+    if require_receipt and not key_env:
+        raise ConfigError("privacy.require_receipt=true needs privacy.manifest_key_env")
+    source_receipt = priv.get("source_receipt")
+    if source_receipt is not None:
+        source_receipt = _resolve(base, source_receipt, "privacy.source_receipt")
+        if not os.path.isfile(source_receipt):
+            raise ConfigError(f"privacy.source_receipt not a file: {source_receipt}")
 
     return {
         "config_path": os.path.abspath(path),
@@ -179,7 +210,14 @@ def load_config(path: str) -> dict:
         "output": resolved_out,
         "display": {"default_css_width": float(css_w), "pixel_density_goal": float(goal)},
         "quality_profiles": _validate_profiles(raw.get("quality_profiles")),
-        "privacy": {"allow_external_urls": allow_ext, "allowed_hosts": hosts},
+        "privacy": {
+            "allow_external_urls": allow_ext,
+            "allowed_hosts": hosts,
+            "require_package_integrity": require_pkg_integrity,
+            "require_receipt": require_receipt,
+            "manifest_key_env": key_env,
+            "source_receipt": source_receipt,
+        },
     }
 
 

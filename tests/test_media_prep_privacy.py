@@ -220,9 +220,10 @@ class PrivacyMatrixTests(unittest.TestCase):
         m["media/unknown.png"] = png_fresh()
         self._refused(m, "c09.zip", "UNALLOWED_IMAGE_MEMBER")
 
-    def test_c10_hidden_scoring_key_flagged(self):
-        """A learner-visible JSON with correct_option_ids cannot be certified:
-        SITE_SCORING_ARCHITECTURE_REVIEW_REQUIRED + verify-package exit 3."""
+    def test_c10_scoring_key_fails_gate_and_cli(self):
+        """P0 CORRECTION CONTRACT: a learner-visible JSON with
+        correct_option_ids makes report['passed'] FALSE for DIRECT library
+        callers (not just a flag), enforce() raises, and the CLI exits 3."""
         m = dict(self.good_members)
         m["import/questions.json"] = json.dumps({
             "questions": [{"id": "q002", "correct_option_ids": ["a"],
@@ -230,9 +231,13 @@ class PrivacyMatrixTests(unittest.TestCase):
         path = os.path.join(self.root, "c10.zip")
         _zip(path, m)
         report = verify_package(self.manifest_path, path)
-        self.assertTrue(report["passed"])  # no privacy leak per se
+        # the direct library contract: a key-bearing payload can NEVER pass
+        self.assertFalse(report["passed"],
+                         "P0 correction: scoring flags must fail report['passed']")
         flags = {f["flag"] for f in report["flags"]}
         self.assertIn("SITE_SCORING_ARCHITECTURE_REVIEW_REQUIRED", flags)
+        with self.assertRaises(PrivacyViolationError):
+            enforce(report)
         rc = mp_cli.main(["verify-package", "--config", self.facts["config"],
                           "--package", path])
         self.assertEqual(rc, 3)
@@ -286,6 +291,138 @@ class PrivacyMatrixTests(unittest.TestCase):
         _zip(path, m)
         report = verify_package(self.manifest_path, path)
         self.assertTrue(report["passed"], report["problems"])
+
+    # -- 2026-11-14 P0 correction: trust-model hardening scenarios ---------
+
+    def _regenerate_integrity(self, m):
+        from certpassly.media_prep.manifest import (entries_hash,
+                                                    package_integrity_hash)
+        m["integrity"]["entries_sha256"] = entries_hash(m["questions"])
+        m["integrity"]["package_integrity_sha256"] = package_integrity_hash(m)
+        return m
+
+    def test_c16_leaky_whole_page_render_in_regenerated_manifest(self):
+        """THE q074 ATTACK: a whole-page render that visibly contains answer
+        lines, wrapped in a FULLY REGENERATED manifest (every hash correctly
+        recomputed, allowlist SHAs updated). Content re-verification against
+        the pinned source must refuse it."""
+        import copy
+        from certpassly.media_prep import imageio
+        from certpassly.media_prep.renderer import render_crop
+        pdf = os.path.join(os.path.dirname(self.facts["config"]),
+                           "synthetic-exam.pdf")
+        leaky = render_crop(pdf, 15, (0, 0, 612, 792), dpi=120, annots=False)
+        leaky_sha = imageio.sha256_bytes(leaky["png_bytes"])
+
+        attack = copy.deepcopy(self.manifest)
+        e15 = next(e for e in attack["questions"] if e["question_id"] == "q015")
+        e15["clean_candidate"]["sha256"] = leaky_sha
+        e15["clean_candidate"]["bytes"] = len(leaky["png_bytes"])
+        e15["clean_candidate"]["render"]["clip"] = [0, 0, 792, 612]
+        e15["clean_candidate"]["render"]["clip_unrotated"] = [0, 0, 612, 792]
+        self._regenerate_integrity(attack)
+        apath = os.path.join(self.root, "attack-manifest.json")
+        json.dump(attack, open(apath, "w"), indent=1)
+
+        members = {k: v for k, v in self.good_members.items()
+                   if k != "import/questions.json"}
+        members[f"media/{e15['clean_candidate']['file']}"] = leaky["png_bytes"]
+        path = os.path.join(self.root, "c16.zip")
+        _zip(path, members)
+        # verify against the ATTACK manifest (all its hashes are correct) -
+        # only content re-verification can catch the leak
+        report = verify_package(apath, path, source_pdf=pdf)
+        self.assertFalse(report["passed"],
+                         "regenerated manifest + leaky whole-page render must "
+                         "be refused by content re-verification")
+        reasons = {p["reason"] for p in report["problems"]}
+        self.assertTrue(reasons & {"ANSWER_TEXT_IN_RENDER",
+                                   "QUESTION_CROP_UNVERIFIED"},
+                        f"expected a crop/answer refusal, got {reasons}")
+        with self.assertRaises(PrivacyViolationError):
+            enforce(report)
+
+    def test_c17_partial_edit_with_entries_hash_only_recompute(self):
+        """Adversary fixes the legacy entries hash but not the package
+        digest: the package_integrity_sha256 mismatch must refuse (the
+        reviewer_only_assets / counts / exam identity are covered too)."""
+        import copy
+        from certpassly.media_prep.manifest import entries_hash
+        t = copy.deepcopy(self.manifest)
+        t["reviewer_only_assets"] = []  # smuggle: empty the reviewer list
+        t["integrity"]["entries_sha256"] = entries_hash(t["questions"])
+        tpath = os.path.join(self.root, "c17-manifest.json")
+        json.dump(t, open(tpath, "w"), indent=1)
+        with self.assertRaises(PrivacyViolationError):
+            load_manifest(tpath)
+
+    def test_c18_manifest_without_package_integrity_refused(self):
+        """A legacy manifest (entries hash only, no package digest) is
+        refused when require_package_integrity is on (the default)."""
+        import copy
+        t = copy.deepcopy(self.manifest)
+        del t["integrity"]["package_integrity_sha256"]
+        tpath = os.path.join(self.root, "c18-manifest.json")
+        json.dump(t, open(tpath, "w"), indent=1)
+        with self.assertRaises(PrivacyViolationError):
+            load_manifest(tpath)
+        m2 = load_manifest(tpath, require_package_integrity=False)
+        self.assertEqual(m2["schema_version"], "image-manifest-v1")
+
+    def test_c19_hmac_receipt_enforcement(self):
+        """require_receipt=true: a valid HMAC receipt (key from OUTSIDE the
+        package) passes; a wrong key and a missing receipt are both refused."""
+        import copy
+        from certpassly.media_prep.manifest import package_integrity_hash, receipt_hmac
+        key = b"test-receipt-key-0123456789"
+        m = copy.deepcopy(self.manifest)
+        m["integrity"]["receipt_sha256_hmac"] = receipt_hmac(
+            key, package_integrity_hash(m))
+        m["integrity"]["receipt_key_id"] = "env:CERTPASSLY_MANIFEST_KEY"
+        mpath = os.path.join(self.root, "c19-manifest.json")
+        json.dump(m, open(mpath, "w"), indent=1)
+        path = os.path.join(self.root, "c19.zip")
+        _zip(path, self.good_members)
+
+        old = os.environ.get("CERTPASSLY_MANIFEST_KEY")
+        try:
+            os.environ["CERTPASSLY_MANIFEST_KEY"] = key.decode()
+            rep = verify_package(mpath, path, require_receipt=True)
+            self.assertTrue(rep["passed"], rep["problems"])
+            os.environ["CERTPASSLY_MANIFEST_KEY"] = "wrong-key"
+            rep = verify_package(mpath, path, require_receipt=True)
+            self.assertFalse(rep["passed"])
+            self.assertIn("RECEIPT_HMAC_MISMATCH",
+                          {p["reason"] for p in rep["problems"]})
+            rep = verify_package(self.manifest_path, path, require_receipt=True)
+            self.assertFalse(rep["passed"])
+            self.assertIn("RECEIPT_MISSING",
+                          {p["reason"] for p in rep["problems"]})
+        finally:
+            if old is None:
+                os.environ.pop("CERTPASSLY_MANIFEST_KEY", None)
+            else:
+                os.environ["CERTPASSLY_MANIFEST_KEY"] = old
+
+    def test_c20_source_receipt_binding(self):
+        """privacy.source_receipt binds the manifest's source PDF identity to
+        an independently pinned exam manifest; a mismatch is refused."""
+        good = {"pdf_files": [{"name": "x.pdf",
+                               "sha256": self.manifest["source_pdf_sha256"],
+                               "bytes": self.manifest["source_pdf_bytes"]}]}
+        bad = {"pdf_files": [{"name": "y.pdf", "sha256": "f" * 64, "bytes": 1}]}
+        gp = os.path.join(self.root, "good-receipt.json")
+        bp = os.path.join(self.root, "bad-receipt.json")
+        json.dump(good, open(gp, "w"))
+        json.dump(bad, open(bp, "w"))
+        path = os.path.join(self.root, "c20.zip")
+        _zip(path, self.good_members)
+        rep = verify_package(self.manifest_path, path, source_receipt=gp)
+        self.assertTrue(rep["passed"], rep["problems"])
+        rep = verify_package(self.manifest_path, path, source_receipt=bp)
+        self.assertFalse(rep["passed"])
+        self.assertIn("SOURCE_RECEIPT_MISMATCH",
+                      {p["reason"] for p in rep["problems"]})
 
 
 def png_fresh():

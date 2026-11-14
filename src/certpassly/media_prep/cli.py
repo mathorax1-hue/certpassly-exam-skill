@@ -186,8 +186,11 @@ def cmd_prepare(args) -> int:
             continue
         src = None
         if cand.get("pixel_source") == "pdf_region_render":
+            # re-render from the UNROTATED clip (render_crop applies the page
+            # rotation itself); never the recorded display-space rect
             out = render_crop(cfg["source"]["pdf"], cand["render"]["page"],
-                              cand["render"]["clip"],
+                              cand["render"].get("clip_unrotated")
+                              or cand["render"]["clip"],
                               dpi=cand["render"]["dpi"], annots=False)
             cand["_render_bytes"] = out["png_bytes"]
         else:
@@ -209,12 +212,24 @@ def cmd_prepare(args) -> int:
                 "bytes": inventory["source_pdf_bytes"]}
     upstream_facts = {"out_dir": cfg["upstream"]["out_dir"],
                       "repo": cfg["upstream"]["repo"], "commit": cfg["upstream"]["commit"]}
-    doc = manifest_mod.build_manifest(cfg, identity, readiness,
-                                      upstream_facts=upstream_facts,
-                                      written=written, reviewer_written=reviewer_written)
+    # optional HMAC receipt: key from OUTSIDE the package (env var named by
+    # privacy.manifest_key_env); never a key in code or the manifest inputs
+    receipt_key = None
+    key_env = cfg["privacy"].get("manifest_key_env") or "CERTPASSLY_MANIFEST_KEY"
+    env_key = os.environ.get(key_env)
+    if env_key:
+        receipt_key = env_key.encode("utf-8")
+    doc = manifest_mod.build_manifest(
+        cfg, identity, readiness,
+        upstream_facts=upstream_facts,
+        written=written, reviewer_written=reviewer_written,
+        receipt_key=receipt_key,
+        receipt_key_id=f"env:{key_env}")
     if not args.dry_run:
         manifest_mod.dump_json(cfg["output"]["manifest"], doc)
         manifest_mod.dump_json(cfg["output"]["inventory"], inventory)
+        if receipt_key:
+            print(f"manifest: {cfg['output']['manifest']} (HMAC receipt via env {key_env})")
 
     blocked = doc["counts"]["blocked_question_ids"]
     if args.json:
@@ -241,8 +256,12 @@ def cmd_verify_package(args) -> int:
     report = verify_package(
         cfg["output"]["manifest"], args.package,
         allow_external_urls=cfg["privacy"]["allow_external_urls"],
-        allowed_hosts=cfg["privacy"]["allowed_hosts"])
-    enforce(report)
+        allowed_hosts=cfg["privacy"]["allowed_hosts"],
+        source_pdf=cfg["source"]["pdf"],
+        require_package_integrity=cfg["privacy"].get("require_package_integrity", True),
+        require_receipt=cfg["privacy"].get("require_receipt", False),
+        manifest_key_env=cfg["privacy"].get("manifest_key_env", "CERTPASSLY_MANIFEST_KEY"),
+        source_receipt=cfg["privacy"].get("source_receipt"))
     if args.report:
         from .manifest import dump_json
         dump_json(args.report, report)
@@ -252,16 +271,14 @@ def cmd_verify_package(args) -> int:
         print(f"verify-package {args.package}: "
               f"{'PASS' if report['passed'] else 'REFUSED'} "
               f"({report['image_members']} image members, "
-              f"{report['allowlisted_images']} allowlisted)")
+              f"{report['allowlisted_images']} allowlisted, "
+              f"{report.get('content_reverified_members', 0)} content-reverified)")
         for f in report["flags"]:
             print(f"  FLAG {f['member']}: {f['flag']} ({f['detail']})")
     if not report["passed"]:
-        return EXIT_TAMPER
-    # answer-architecture honesty: scoring keys present -> cannot certify
-    if report["flags"]:
-        print("NOT CERTIFIED: learner-visible scoring keys found; "
-              "server-side scoring architecture must be reviewed on staging first",
-              file=sys.stderr)
+        # hard problems OR scoring-key flags -> typed refusal, exit 3
+        # (P0 correction: the direct library contract now fails identically)
+        enforce(report)
         return EXIT_TAMPER
     return EXIT_OK
 

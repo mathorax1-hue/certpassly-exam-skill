@@ -1,14 +1,49 @@
 """Deterministic, tamper-evident manifest writing (image-manifest-v1).
 
 Canonical form: JSON with sort_keys=True, separators=(",", ":") for hashing
-and indent=1 for the written file, ensure_ascii=False. The manifest embeds
-``integrity.entries_sha256`` - the SHA-256 of the canonical serialization of
-the questions array - so verify-package can detect ANY post-hoc edit of
-entries (role flips, SHA swaps, eligibility forgeries) with exit 3.
+and indent=1 for the written file, ensure_ascii=False.
+
+Integrity model (2026-11-14 P0 correction - honest trust boundaries):
+
+  ``integrity.entries_sha256``       LEGACY partial digest over the questions
+                                     array only. Kept for continuity; it is
+                                     recomputable by anyone and is NOT the
+                                     trust anchor.
+  ``integrity.package_integrity_sha256``  Digest over ALL security-critical
+                                     fields (exam identity, pinned source,
+                                     generated_by, questions, reviewer_only_
+                                     assets, counts) - detects partial edits
+                                     AND edits outside the questions array.
+                                     Still self-declared: an attacker who
+                                     regenerates the whole manifest can
+                                     recompute it.
+  ``integrity.receipt_sha256_hmac``  OPTIONAL HMAC-SHA256 receipt over the
+                                     package digest, keyed by a secret held
+                                     OUTSIDE the package (environment variable
+                                     named by privacy.manifest_key_env; never
+                                     a key in public code). When
+                                     privacy.require_receipt is true,
+                                     verify-package refuses any manifest
+                                     without a valid receipt - this is the
+                                     independent tamper-evidence layer.
+  ``privacy.source_receipt``         Optional independent binding: the exam's
+                                     pinned source manifest (e.g. the private
+                                     repository's exams/<code>/manifest.json)
+                                     must contain the manifest's source PDF
+                                     sha256/bytes, tying the package to a
+                                     file the operator pinned separately.
+
+  On top of the hashes, verify-package CONTENT-RE-VERIFIES every allowlisted
+  member against the pinned source PDF (render clips re-checked for answer/
+  marker text; raster members re-matched to embedded PDF images and re-run
+  through mark detection), so a fully regenerated manifest wrapped around a
+  leaky or marked image is still refused. No self-signed checksum is ever
+  presented as adversarial tamper-evidence.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -24,6 +59,28 @@ def canonical_bytes(obj) -> bytes:
 
 def entries_hash(questions: list) -> str:
     return hashlib.sha256(canonical_bytes(questions)).hexdigest()
+
+
+# Security-critical manifest payload: everything the privacy gate relies on.
+# The integrity block itself is deliberately excluded (it covers the payload).
+PACKAGE_PAYLOAD_KEYS = ("schema_version", "exam_code", "source_pdf_sha256",
+                        "source_pdf_bytes", "generated_by", "questions",
+                        "reviewer_only_assets", "counts")
+
+
+def package_payload(manifest: dict) -> dict:
+    return {k: manifest.get(k) for k in PACKAGE_PAYLOAD_KEYS}
+
+
+def package_integrity_hash(manifest: dict) -> str:
+    """SHA-256 of the canonical serialization of ALL security-critical fields."""
+    return hashlib.sha256(canonical_bytes(package_payload(manifest))).hexdigest()
+
+
+def receipt_hmac(key: bytes, package_digest: str) -> str:
+    """HMAC-SHA256 receipt over the package digest (key stays outside the package)."""
+    return hmac.new(key, package_digest.encode("utf-8"),
+                    hashlib.sha256).hexdigest()
 
 
 def atomic_write(path: str, data: bytes) -> None:
@@ -98,8 +155,15 @@ def write_reviewer_only(private_dir: str, fname: str, data: bytes) -> dict:
 
 
 def build_manifest(cfg: dict, identity: dict, readiness: dict, *, upstream_facts: dict,
-                   written: dict, reviewer_written: dict) -> dict:
-    """Assemble the image-manifest-v1 document (deterministic, sorted qids)."""
+                   written: dict, reviewer_written: dict, receipt_key: bytes = None,
+                   receipt_key_id: str = None) -> dict:
+    """Assemble the image-manifest-v1 document (deterministic, sorted qids).
+
+    ``receipt_key``: optional HMAC secret from OUTSIDE the package (the CLI
+    reads it from the environment variable named by privacy.manifest_key_env).
+    When provided, an HMAC receipt over the package digest is embedded so
+    verify-package can enforce independent (non-self-declared) integrity.
+    """
     questions = []
     for qid in sorted(readiness):
         rec = readiness[qid]
@@ -129,6 +193,20 @@ def build_manifest(cfg: dict, identity: dict, readiness: dict, *, upstream_facts
                 "source_sha256": cand["source_sha256"],
                 "quality": cand.get("quality"),
             }
+            # P0 correction: record the exact render geometry so the privacy
+            # gate can RE-VERIFY the crop against the pinned source PDF
+            # (no marker / answer text may intersect it) instead of trusting
+            # the manifest SHA alone
+            r = cand.get("render") or {}
+            if cand.get("pixel_source") == "pdf_region_render" and r.get("page") is not None:
+                entry["clean_candidate"]["render"] = {
+                    "page": r.get("page"),
+                    "clip": r.get("clip"),
+                    "clip_unrotated": r.get("clip_unrotated"),
+                    "dpi": r.get("dpi"),
+                    "page_rotation_deg": r.get("page_rotation_deg"),
+                    "source_number": r.get("source_number"),
+                }
         elif cand:
             entry["clean_candidate"] = {
                 "method": cand["method"],
@@ -167,8 +245,17 @@ def build_manifest(cfg: dict, identity: dict, readiness: dict, *, upstream_facts
         },
         "integrity": {},
     }
-    manifest["integrity"] = {
+    package_digest = package_integrity_hash(manifest)
+    integrity = {
         "entries_sha256": entries_hash(questions),
-        "algorithm": "sha256(canonical_json(sort_keys)(questions))",
+        "algorithm_entries": "sha256(canonical_json(sort_keys)(questions)) - legacy partial digest",
+        "package_integrity_sha256": package_digest,
+        "algorithm": ("sha256(canonical_json(sort_keys)("
+                      + ",".join(PACKAGE_PAYLOAD_KEYS) + "))"),
     }
+    if receipt_key:
+        integrity["receipt_sha256_hmac"] = receipt_hmac(receipt_key, package_digest)
+        integrity["receipt_key_id"] = receipt_key_id or "external-env"
+        integrity["receipt_algorithm"] = "hmac-sha256(package_integrity_sha256)"
+    manifest["integrity"] = integrity
     return manifest

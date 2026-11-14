@@ -46,9 +46,11 @@ from . import pair_and_align
 from . import quality as quality_mod
 from . import renderer as renderer_mod
 from . import roles
+from . import exhibit_crop
 from .roles import (METHOD_NONE, METHOD_PRIORITY_A, METHOD_PRIORITY_B,
-                    METHOD_PRIORITY_C, R_CLEAN_ASSET_MISSING,
-                    R_MARKED_ONLY_REVIEW_REQUIRED, R_SOURCE_IMAGE_AMBIGUOUS,
+                    METHOD_PRIORITY_C, R_ANSWER_TEXT_IN_RENDER,
+                    R_CLEAN_ASSET_MISSING, R_MARKED_ONLY_REVIEW_REQUIRED,
+                    R_QUESTION_CROP_UNVERIFIED, R_SOURCE_IMAGE_AMBIGUOUS,
                     R_SOURCE_IMAGE_CORRUPT, R_SOURCE_IMAGE_LOW_RESOLUTION,
                     R_SOURCE_SHA_MISMATCH, REVIEW_BLOCKED,
                     REVIEW_CLEAN_LOW_RESOLUTION, REVIEW_CLEAN_READY)
@@ -114,7 +116,40 @@ def _candidate_from_source(ctx, fname, img, method, extra_note=None) -> dict:
     }
 
 
-def _try_priority_b_render(ctx, fname, rec, page_no, rect, issues) -> dict | None:
+def _verify_render_region(ctx, page_no, clip_unrotated, source_number):
+    """Fail-closed content verification of a would-be render region.
+
+    The region (UNROTATED points) must contain NO question marker text, NO
+    ``Correct Answer:`` line and NO explanation/section line - for the target
+    question or any neighbour - and, when the question's own marker is on the
+    page, must lie inside its marker/answer-verified band. Returns None when
+    the region verifies clean, else a blocked-reason dict (P0 correction).
+    """
+    try:
+        import fitz
+    except ImportError:  # pragma: no cover
+        return None
+    try:
+        doc = fitz.open(ctx.cfg["source"]["pdf"])
+        if not (1 <= page_no <= doc.page_count):
+            return {"reason": R_QUESTION_CROP_UNVERIFIED,
+                    "detail": f"render page {page_no} out of range"}
+        page = doc[page_no - 1]
+        clip_disp = exhibit_crop.display_clip(page, clip_unrotated)
+        verdict = exhibit_crop.verify_render_clip(
+            ctx.cfg["source"]["pdf"], page_no, clip_disp, source_number)
+    except Exception as exc:
+        return {"reason": R_QUESTION_CROP_UNVERIFIED,
+                "detail": f"render-region verification failed: {exc}"}
+    if verdict["status"] == exhibit_crop.CROP_OK:
+        return None
+    if verdict["status"] == exhibit_crop.CROP_ANSWER_TEXT:
+        return {"reason": R_ANSWER_TEXT_IN_RENDER,
+                "detail": verdict["detail"]}
+    return {"reason": R_QUESTION_CROP_UNVERIFIED, "detail": verdict["detail"]}
+
+
+def _try_priority_b_render(ctx, fname, rec, page_no, rect, issues, source_number=None):
     """Priority B for a marked raster whose page carries real annotations.
 
     Self-verification (all must hold, else Priority B is honestly not
@@ -123,8 +158,19 @@ def _try_priority_b_render(ctx, fname, rec, page_no, rect, issues) -> dict | Non
          (the annotations actually contributed visible pixels);
       2. mark detection on the annotation-free render finds NO pen marks
          (flattened raster marks would survive the render and B cannot help);
-      3. the render is decodable and non-empty.
+      3. the render is decodable and non-empty;
+      4. P0 CORRECTION: the rendered region (the image placement rect) is
+         content-verified against the page text layer - no question marker,
+         ``Correct Answer:`` or explanation/section text may appear in it,
+         and it must sit inside the question's own verified band when the
+         marker is on the page (ANSWER_TEXT_IN_RENDER /
+         QUESTION_CROP_UNVERIFIED otherwise; exit 2, no learner image).
     """
+    if source_number is not None:
+        bad = _verify_render_region(ctx, page_no, tuple(rect), source_number)
+        if bad:
+            issues.append(bad)
+            return None
     dpi = 300
     clean_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, rect,
                                          dpi=dpi, annots=False)
@@ -161,53 +207,75 @@ def _try_priority_b_render(ctx, fname, rec, page_no, rect, issues) -> dict | Non
         "lossless_source": True,
         "render": {**clean_out, "render_sha256": cand_sha, "render_bytes": len(png)},
         "embedded_raster_ceiling": facts,
-        "note": "rendered from the original PDF page region with real annotations "
-                "excluded; the annotation-free render was machine-verified unmarked",
+        "note": "rendered from the original PDF page region (the image's own "
+                "placement rect, rotation-corrected, content-verified free of "
+                "answer/marker text) with real annotations excluded; the "
+                "annotation-free render was machine-verified unmarked",
     }
 
 
-def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
+def _try_priority_b_vector_exhibit(ctx, qid, qrec, page_no, issues):
     """Priority B (vector variant): the exhibit is DRAWN in the PDF, not raster.
 
-    A page whose vector drawings cover a substantial area (>=20%) is rendered
-    whole at high DPI (annots=False). Verification is annotation-diff based:
-    when real annotations exist on the page, the annotation-free render must
-    actually DIFFER from the with-annotations render (the marks were real
-    annotations and excluding them changed pixels). Vector page content is
-    original exam content by the pinned upstream contract; vector-DRAWN pen
-    marks cannot be distinguished from table borders and are recorded as a
-    documented limitation (VECTOR_PEN_MARK_UNDETECTABLE), never as clean.
+    2026-11-14 P0 CORRECTION - the old whole-page fallback
+    (``clip = tuple(page.rect)``) is REMOVED. It rendered neighbouring
+    questions and their ``Correct Answer:`` key lines into "clean" learner
+    images (proven on real AB-730 q074, page 59). A learner render now
+    requires an EXACT, source-verified exhibit crop computed by
+    ``exhibit_crop.question_exhibit_crop``:
+
+      - the crop is bounded by the question's own ``QUESTION <n>`` marker
+        and the next marker / its own ``Correct Answer:`` line / end of
+        content, whichever comes first in the empirically detected reading
+        direction;
+      - it is the union of the question's OWN non-background vector
+        drawings (near-white un-stroked page chrome is excluded);
+      - no marker, answer, explanation or section text may intersect the
+        crop - else the question is BLOCKED with
+        QUESTION_CROP_UNVERIFIED / ANSWER_TEXT_IN_RENDER (exit 2, no
+        learner image). No blacking-out, no pixel erasure, ever.
+
+    Verification additionally keeps: mark detection on the rendered pixels
+    (a vector-drawn pen-like shape still blocks conservatively,
+    VECTOR_PEN_MARK_UNDETECTABLE) and the annotation-diff proof when the
+    page carries real annotations.
     """
     try:
         import fitz
     except ImportError:  # pragma: no cover
         return None
+    source_number = qrec.get("source_number")
+    if not source_number:
+        issues.append({"reason": R_QUESTION_CROP_UNVERIFIED,
+                       "detail": "upstream record has no source_number; the "
+                                 "question marker cannot be located"})
+        return None
     doc = fitz.open(ctx.cfg["source"]["pdf"])
     if not (1 <= page_no <= doc.page_count):
         return None
     page = doc[page_no - 1]
-    try:
-        drawings = page.get_drawings()
-    except Exception:
+    crop = exhibit_crop.question_exhibit_crop(page, source_number)
+    if crop["status"] == exhibit_crop.CROP_NO_EXHIBIT:
+        return None  # honestly not applicable on this page
+    if crop["status"] == exhibit_crop.CROP_ANSWER_TEXT:
+        issues.append({"reason": R_ANSWER_TEXT_IN_RENDER,
+                       "detail": f"page {page_no}: {crop['detail']}"})
         return None
-    try:
-        page_area = abs(page.rect)
-    except Exception:
+    if crop["status"] == exhibit_crop.CROP_UNVERIFIED:
+        issues.append({"reason": R_QUESTION_CROP_UNVERIFIED,
+                       "detail": f"page {page_no}: {crop['detail']}"})
         return None
-    drawn_area = 0.0
-    for d in drawings:
-        try:
-            r = d.get("rect")
-            if r is None:
-                continue
-            drawn_area += abs(fitz.Rect(r))
-        except Exception:
-            continue
-    if page_area <= 0 or drawn_area < 0.20 * page_area:
+
+    clip_unrot = crop["clip_unrotated"]
+    # defence in depth: re-verify the exact region we are about to render
+    bad = _verify_render_region(ctx, page_no, clip_unrot, source_number)
+    if bad:
+        issues.append({"reason": bad["reason"],
+                       "detail": f"page {page_no}: {bad['detail']}"})
         return None
-    clip = tuple(page.rect)
-    clean_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
-                                         dpi=300, annots=False)
+
+    clean_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no,
+                                         clip_unrot, dpi=300, annots=False)
     png = clean_out.pop("png_bytes")
     # The render must be provably unmarked: run the same mark detector on the
     # rendered pixels. Legitimate LIGHT-gray vector chrome (row lines, table
@@ -215,7 +283,7 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
     # content (owner-drawn circles, dark-bordered boxes) DO - and because a
     # vector-drawn mark cannot be distinguished from vector content, the
     # question is conservatively BLOCKED for human review instead of shipped.
-    rendered = imageio.SourceImage(f"{qid}.vector-page.png", png)
+    rendered = imageio.SourceImage(f"{qid}.vector-exhibit.png", png)
     mk = marking_mod.detect_marks(rendered.flattened_rgb())
     if marking_mod.looks_marked(mk):
         issues.append({"reason": "PRIORITY_B_NOT_APPLICABLE",
@@ -224,25 +292,26 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
                                  f"(VECTOR_PEN_MARK_UNDETECTABLE) - blocked for review"})
         return None
     if clean_out["annotations_present"]:
-        with_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no, clip,
-                                            dpi=300, annots=True)
+        with_out = renderer_mod.render_crop(ctx.cfg["source"]["pdf"], page_no,
+                                            clip_unrot, dpi=300, annots=True)
         with_png = with_out.pop("png_bytes")
         if png == with_png:
             issues.append({"reason": "PRIORITY_B_NOT_APPLICABLE",
                            "detail": f"page {page_no}: annotations did not change the render"})
             return None
-        issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
-                       "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
-                                 f"(drawings cover {drawn_area / page_area:.0%} of the page); "
-                                 f"{len(clean_out['annotations_in_clip'])} real annotations "
-                                 f"excluded (render differs from with-annotations render); "
-                                 f"render mark-check clean ({mk['detected_mark_boxes']} shapes)"})
+        annot_note = (f"{len(clean_out['annotations_in_clip'])} real annotations "
+                      f"excluded (render differs from with-annotations render)")
     else:
-        issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
-                       "detail": f"page {page_no}: vector exhibit rendered at 300 DPI "
-                                 f"(drawings cover {drawn_area / page_area:.0%} of the page); "
-                                 f"page has no annotations; render mark-check clean "
-                                 f"({mk['detected_mark_boxes']} shapes)"})
+        annot_note = "page has no annotations"
+    issues.append({"reason": "PRIORITY_B_VECTOR_RENDER",
+                   "detail": f"page {page_no}: exact exhibit crop "
+                             f"{crop['crop_width_pt']}x{crop['crop_height_pt']}pt "
+                             f"rendered at 300 DPI ({crop['drawings_used']} question-owned "
+                             f"vector drawings, {crop['backgrounds_excluded']} background "
+                             f"shapes excluded, flow={crop['axis']}/{crop['axis_basis']}, "
+                             f"bounded by {crop['end_bound_reason']}); {annot_note}; "
+                             f"render mark-check clean ({mk['detected_mark_boxes']} shapes); "
+                             f"no marker/answer text intersects the crop"})
     return {
         "source_file": f"(pdf-page-{page_no}-vector)",
         "source_sha256": imageio.sha256_bytes(png),
@@ -255,10 +324,14 @@ def _try_priority_b_vector_page(ctx, qid, page_no, issues) -> dict | None:
         "lossless_source": True,
         "render": {**clean_out, "render_sha256": imageio.sha256_bytes(png),
                    "render_bytes": len(png),
+                   "source_number": source_number,
+                   "exhibit_crop": crop,
                    "vector_pen_mark_undetectable": True},
         "embedded_raster_ceiling": None,
-        "note": "question exhibit is drawn as PDF vector content; rendered from the "
-                "original page at high DPI (true added pixels, not upscaling); "
+        "note": "question exhibit is drawn as PDF vector content; rendered as "
+                "an EXACT source-verified crop (the union of the question's "
+                "own vector drawings inside its marker/answer-verified band; "
+                "whole-page renders are categorically refused); "
                 "vector-drawn pen marks are a documented out-of-scope limitation",
     }
 
@@ -269,9 +342,12 @@ def _load_render_bytes(ctx, candidate) -> bytes:
         cache = ctx._render_cache = {}
     key = (candidate["source_file"], candidate["method"], candidate.get("render", {}).get("dpi"))
     if key not in cache:
+        # re-render from the UNROTATED clip (render_crop maps it through the
+        # page rotation itself); never the display-space rect
         out = renderer_mod.render_crop(
             ctx.cfg["source"]["pdf"], candidate["render"]["page"],
-            candidate["render"]["clip"], dpi=candidate["render"]["dpi"], annots=False)
+            candidate["render"].get("clip_unrotated") or candidate["render"]["clip"],
+            dpi=candidate["render"]["dpi"], annots=False)
         cache[key] = out["png_bytes"]
     return cache[key]
 
@@ -443,7 +519,8 @@ def _decide_one_question(ctx, qid, qrec) -> dict:
             issues.append({"reason": "PAIR_EVIDENCE", "detail": pair_evidence})
 
     # Priority B (annotation variant): only when a real annotation overlaps
-    # the marked image placement AND the render self-verifies unmarked.
+    # the marked image placement AND the render self-verifies unmarked AND
+    # the rendered region is content-verified free of answer/marker text.
     if candidate is None:
         for u in q_files:
             fname = u["file"]
@@ -465,17 +542,20 @@ def _decide_one_question(ctx, qid, qrec) -> dict:
                     continue
                 if not marking_mod.looks_marked(marks_by_file.get(fname, {})):
                     continue  # nothing to separate
-                candidate = _try_priority_b_render(ctx, fname, rec, page_no, pl["rect"], issues)
+                candidate = _try_priority_b_render(
+                    ctx, fname, rec, page_no, pl["rect"], issues,
+                    source_number=qrec.get("source_number"))
                 if candidate:
                     break
             if candidate:
                 break
 
     # Priority B (vector variant): the exhibit is DRAWN (vector) rather than
-    # a raster; render the page at high DPI and self-verify.
+    # a raster; render the EXACT source-verified exhibit crop (P0 correction:
+    # whole-page renders are categorically refused) and self-verify.
     if candidate is None and exhibit_ref:
         for page_no in qrec.get("pages") or []:
-            candidate = _try_priority_b_vector_page(ctx, qid, page_no, issues)
+            candidate = _try_priority_b_vector_exhibit(ctx, qid, qrec, page_no, issues)
             if candidate:
                 break
 
@@ -507,6 +587,15 @@ def _decide_one_question(ctx, qid, qrec) -> dict:
             reason = R_CLEAN_ASSET_MISSING
             detail = "question has only answer-area images (or only an unrenderable " \
                      "exhibit reference); no learner exhibit source"
+        # P0 correction: exhibit-reference questions whose vector crop could
+        # not be source-verified report the specific crop failure, never a
+        # generic fallback that hides the answer-leak check
+        crop_fail = [i for i in issues
+                     if i.get("reason") in (R_QUESTION_CROP_UNVERIFIED,
+                                             R_ANSWER_TEXT_IN_RENDER)]
+        if crop_fail and not q_files:
+            reason = crop_fail[0]["reason"]
+            detail = crop_fail[0]["detail"]
         blocked_reasons.append({"reason": reason, "detail": detail})
         _finalize_roles(decisions, marks_by_file, None, inferred_swap, pair_clean_members)
         return {

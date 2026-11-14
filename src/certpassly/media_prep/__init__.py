@@ -12,6 +12,12 @@ Scope and honest limitations (read before use):
   - No AI, no OCR-created answer content, no generative restoration, no
     inpainting, no upscaling-as-restoration. When no provable clean source
     exists the question is BLOCKED with an explicit reason code.
+  - Whole-page renders are NEVER learner images (2026-11-14 P0 correction:
+    a whole-page vector render of real AB-730 page 59 exposed neighbouring
+    questions' ``Correct Answer:`` lines). Every rendered learner image is
+    an EXACT, source-verified exhibit crop bounded by the question's own
+    marker and answer geometry; otherwise the question is blocked with
+    QUESTION_CROP_UNVERIFIED / ANSWER_TEXT_IN_RENDER (exit 2).
   - ``PyMuPDF page.get_pixmap(..., annots=False)`` only removes true PDF
     annotations. Flattened raster selection marks are NOT annotations and are
     NOT cleaned by rendering; the tool records this honestly and never claims
@@ -57,17 +63,22 @@ Module map (import-safe without optional extras; heavy imports are lazy):
   upstream_runner.py  subprocess adapter to the pinned upstream extractor
   marking.py          raster mark detection (dark-box connected components)
   pair_and_align.py   conservative clean/marked pair registration (advisory)
-  renderer.py         Priority-B high-DPI crop rendering (annots=False)
+  exhibit_crop.py     source-verified question/exhibit bounding regions
+                      (P0 correction: whole-page renders are impossible)
+  renderer.py         Priority-B high-DPI crop rendering (annots=False,
+                      rotation-corrected display-space clips)
   quality.py          dimension/density/blur/contrast/clipping/aspect checks
   selection.py        the strict A/B/C/D priority engine
   manifest.py         deterministic canonical manifest writer (atomic)
+                      + package integrity + optional HMAC receipt
   privacy_gate.py     allowlist builder + ZIP/site-reference privacy scanner
+                      with pinned-source CONTENT re-verification
   cli.py              argparse CLI with the exit-code contract above
 """
 from __future__ import annotations
 
 TOOLKIT_NAME = "certpassly-media-prep"
-TOOLKIT_VERSION = "1.0.0"
+TOOLKIT_VERSION = "1.1.0"
 READINESS_SCHEMA_VERSION = "image-readiness-v1"
 MANIFEST_SCHEMA_VERSION = "image-manifest-v1"
 CONFIG_SCHEMA_VERSION = "media-prep-v1"

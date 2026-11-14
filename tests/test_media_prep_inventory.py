@@ -79,17 +79,24 @@ class ProcessingMatrixTests(unittest.TestCase):
         # the candidate IS the source bytes for lossless inputs (no re-encode)
         self.assertEqual(self.inv["files"]["p-002_1.png"]["sha256"], src_sha)
 
-    def test_a04_vector_rendered_true_high_resolution(self):
-        """q008: vector exhibit rendered at 300 DPI with real added pixels."""
+    def test_a04_vector_rendered_exact_crop_high_resolution(self):
+        """q008: vector exhibit rendered at 300 DPI as an EXACT crop (P0
+        correction: never the whole page) with real added pixels."""
         r = self._q("q008")
         self.assertTrue(r["is_learner_eligible"])
         cand = r["clean_candidate"]
         self.assertEqual(cand["method"], "priority_b_annotation_free_render")
         self.assertEqual(cand["pixel_source"], "pdf_region_render")
-        # 612x792pt page at 300dpi, /Rotate 90 -> landscape ~3300x2550 device
-        # pixels (>> the 612x792 of a 72dpi render): real added pixels
-        self.assertGreaterEqual(cand["width"], 3100)
-        self.assertGreaterEqual(cand["height"], 2400)
+        # the exact exhibit crop is ~530x280pt -> at 300dpi on the rotated
+        # display ~1167x2209 px: real added pixels, but NOT page-sized
+        self.assertGreaterEqual(cand["width"], 900)
+        self.assertGreaterEqual(cand["height"], 2000)
+        self.assertLess(cand["width"], 2500,
+                        "a whole-page-sized render is categorically forbidden")
+        self.assertLess(cand["height"], 2600)
+        # both rects recorded for independent verification
+        self.assertIn("clip_unrotated", cand["render"])
+        self.assertIn("clip", cand["render"])
 
     def test_a05_annotation_omitted_without_dropping_content(self):
         """q008: the square annotation (the 'key') is excluded, vector table text stays."""
@@ -111,12 +118,13 @@ class ProcessingMatrixTests(unittest.TestCase):
                               "question_images": ["p-101_1.png"], "answer_images": [],
                               "layout_profile": "question_n_correct_answer"}}
             pdf = os.path.join(root, "flat.pdf")
-            # page: marked raster embedded + a real highlight annotation over it
+            # realistic layout: marker+stem, the marked raster BETWEEN them
+            # and the Correct Answer line BELOW the exhibit (band-verifiable)
             build_pdf(pdf, pages_spec=[{
-                "text": [(60, 100, ["QUESTION 101", "Synthetic flattened-mark stem",
-                                    "Correct Answer: A"])],
-                "images": [((60, 240, 552, 440), media["p-101_1.png"])],
-                "annot": {"rect": [70, 250, 300, 290], "type": "highlight"}}])
+                "text": [(60, 100, ["QUESTION 101", "Synthetic flattened-mark stem"]),
+                         (60, 420, ["Correct Answer: A"])],
+                "images": [((60, 150, 552, 400), media["p-101_1.png"])],
+                "annot": {"rect": [70, 180, 300, 220], "type": "highlight"}}])
             out = write_upstream_workspace(os.path.join(root, "out"), split, media)
             cfg = load_config(self._config_for(root, pdf, out))
             inv = build_inventory(cfg)
@@ -130,14 +138,23 @@ class ProcessingMatrixTests(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
-    def test_a07_rotated_page_crop_orientation(self):
-        """All fixture pages are /Rotate 90 (portrait media box shown landscape);
-        the render must match the DISPLAYED orientation (width/height ~ 792/612)."""
+    def test_a07_rotated_page_crop_display_geometry(self):
+        """All fixture pages are /Rotate 90 (portrait media box shown
+        landscape). The recorded DISPLAY clip must be the transposition of
+        the UNROTATED clip (rotation actually applied); the render's pixel
+        aspect must match the display clip, not the raw unrotated rect (the
+        latent rotation bug fixed 2026-11-14)."""
         cand = self._q("q008")["clean_candidate"]
         self.assertEqual(cand["render"]["page_rotation_deg"], 90)
+        disp = cand["render"]["clip"]
+        unrot = cand["render"]["clip_unrotated"]
+        self.assertAlmostEqual(disp[2] - disp[0], unrot[3] - unrot[1], delta=2.0,
+                               msg="display clip width must equal the unrotated "
+                                   "clip height (90-degree transposition)")
+        self.assertAlmostEqual(disp[3] - disp[1], unrot[2] - unrot[0], delta=2.0)
         ratio = cand["width"] / cand["height"]
-        self.assertAlmostEqual(ratio, 792 / 612, delta=0.05,
-                               msg="render must be the displayed landscape orientation")
+        self.assertAlmostEqual(ratio, (disp[2] - disp[0]) / (disp[3] - disp[1]),
+                               delta=0.05)
 
     def test_a08_multipage_item(self):
         """An item spanning two pages with its exhibit on the second still resolves."""
@@ -283,12 +300,85 @@ class ProcessingMatrixTests(unittest.TestCase):
             inv = build_inventory(cfg)
             ready = run_selection(cfg, inv)
             r = ready["q501"]
-            self.assertFalse(r["is_learner_eligible"], 
+            self.assertFalse(r["is_learner_eligible"],
                              "vector pen-mark page must block, not render")
             self.assertTrue(any("PRIORITY_B_NOT_APPLICABLE" in json.dumps(i)
                                 for i in r["issues"]))
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+    # -- 2026-11-14 P0 correction scenarios ----------------------------------
+
+    def test_a16_multi_question_page_exact_crop_excludes_answers(self):
+        """q015 (THE q074 regression): the page visibly carries the previous
+        question's Correct Answer + Explanation tail and q015's own answer
+        line. Only an exact in-band exhibit crop is eligible - the old
+        whole-page fallback is gone."""
+        import fitz
+        from certpassly.media_prep import exhibit_crop
+        r = self._q("q015")
+        self.assertTrue(r["is_learner_eligible"])
+        cand = r["clean_candidate"]
+        self.assertEqual(cand["method"], "priority_b_annotation_free_render")
+        crop = cand["render"]["exhibit_crop"]
+        self.assertEqual(crop["axis"], "+y")
+        self.assertEqual(crop["axis_basis"], "marker-order")
+        self.assertEqual(crop["end_bound_reason"], "correct-answer line")
+        self.assertGreaterEqual(crop["drawings_used"], 1)
+        # geometry: the crop intersects NO answer/marker/explanation line
+        pdf = self.cfg["source"]["pdf"]
+        page = fitz.open(pdf)[14]
+        crop_rect = fitz.Rect(*crop["clip_unrotated"])
+        from certpassly.media_prep.exhibit_crop import (_lines_of,
+                                                        ANSWER_LINE_RX,
+                                                        EXPLANATION_LINE_RX,
+                                                        QUESTION_MARKER_RX)
+        for txt, bbox, _bno in _lines_of(page):
+            line = fitz.Rect(bbox)
+            is_answer = ANSWER_LINE_RX.match(txt) or EXPLANATION_LINE_RX.match(txt)
+            is_marker = QUESTION_MARKER_RX.match(txt)
+            if is_answer or is_marker:
+                self.assertFalse(
+                    crop_rect.intersects(line),
+                    f"crop must not intersect {txt!r}")
+
+    def test_a17_marker_bottom_of_page_blocks_unverified(self):
+        """q016: the question's marker sits at the very bottom of the shared
+        page; the remaining band is too small to bound an exhibit -> blocked
+        QUESTION_CROP_UNVERIFIED (fail closed, no fallback render)."""
+        r = self._q("q016")
+        self.assertFalse(r["is_learner_eligible"])
+        self.assertTrue(any(b["reason"] == "QUESTION_CROP_UNVERIFIED"
+                            for b in r["blocked_reasons"]))
+
+    def test_a18_missing_source_number_blocks_unverified(self):
+        """q017: exhibit reference without a source_number in the upstream
+        record cannot be tied to a marker -> QUESTION_CROP_UNVERIFIED."""
+        r = self._q("q017")
+        self.assertFalse(r["is_learner_eligible"])
+        self.assertTrue(any(b["reason"] == "QUESTION_CROP_UNVERIFIED"
+                            for b in r["blocked_reasons"]))
+
+    def test_a19_render_region_verification_unit(self):
+        """Direct unit checks of the fail-closed render-region verifier:
+        answer text and markers inside a would-be render region are refused;
+        whole-page regions are categorically unverifiable."""
+        import fitz
+        from certpassly.media_prep import exhibit_crop
+        pdf = self.cfg["source"]["pdf"]
+        # q015's verified crop passes
+        cand = self._q("q015")["clean_candidate"]
+        v = exhibit_crop.verify_render_clip(pdf, 15, cand["render"]["clip"], 15)
+        self.assertEqual(v["status"], exhibit_crop.CROP_OK)
+        # a display-space clip over the whole page is refused (the q074 bug)
+        whole = exhibit_crop.display_clip(fitz.open(pdf)[14], (0, 0, 612, 792))
+        v = exhibit_crop.verify_render_clip(pdf, 15, whole, 15)
+        self.assertIn(v["status"], (exhibit_crop.CROP_UNVERIFIED,
+                                    exhibit_crop.CROP_ANSWER_TEXT))
+        # a clip covering the top-of-page answer tail is ANSWER_TEXT_IN_RENDER
+        top = exhibit_crop.display_clip(fitz.open(pdf)[14], (0, 0, 612, 100))
+        v = exhibit_crop.verify_render_clip(pdf, 15, top, 15)
+        self.assertEqual(v["status"], exhibit_crop.CROP_ANSWER_TEXT)
 
     # -- helpers -------------------------------------------------------------
 

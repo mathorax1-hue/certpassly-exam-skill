@@ -188,11 +188,17 @@ def build_pdf(path, *, pages_spec):
     """Build a synthetic exam PDF.
 
     pages_spec: list of dicts:
-      {"text": [(x, y, [lines...]), ...],
+      {"text": [(x, y, [lines...]), ...],        # one insert_text block per tuple
        "images": [(rect, bytes)],
        "annot": {"rect": [..], "type": "square"|"highlight"|"ink"},
-       "vector_exhibit": True, "rotate": 0}
-    Deterministic output for identical input.
+       "vector_table": {"x0":.., "y0":.., "x1":.., "y1":.., "rows": N},
+       "vector_exhibit": True,                   # legacy default placement
+       "rotate": 0}
+    Deterministic output for identical input. Text is written UNROTATED into
+    the page content stream (so on /Rotate 90 pages it reads top-to-bottom in
+    the +y direction of unrotated space - the same convention every fixture
+    page already uses); vector tables are drawn at the exact given rect so
+    exhibit-crop geometry tests have deterministic bounds.
     """
     doc = fitz.open()
     for spec in pages_spec:
@@ -206,15 +212,25 @@ def build_pdf(path, *, pages_spec):
         for (rect, data) in spec.get("images", []):
             # PyMuPDF sniffs the format from the stream bytes itself
             page.insert_image(fitz.Rect(*rect), stream=data)
-        if spec.get("vector_exhibit"):
-            # a big vector table drawn directly in the PDF
-            y0 = 200
-            for r in range(6):
-                y = y0 + r * 40
-                page.draw_line(fitz.Point(40, y), fitz.Point(570, y), color=(0.55, 0.55, 0.62), width=1)
-                page.insert_text((48, y + 16), f"Vector row {r + 1} synthetic statement",
-                                 fontsize=10, fontname="helv")
-            page.draw_rect(fitz.Rect(40, y0 - 20, 570, y0 + 240), color=(0.55, 0.55, 0.62), width=1.2)
+        table = spec.get("vector_table")
+        if table or spec.get("vector_exhibit"):
+            if table:
+                x0 = table["x0"]; y0 = table["y0"]
+                x1 = table["x1"]; y1 = table["y1"]
+                rows = table.get("rows", 6)
+            else:  # legacy default placement (old q008 layout)
+                x0, y0, x1, y1, rows = 40, 200, 570, 440, 6
+            row_h = (y1 - y0) / (rows + 1)
+            for r in range(rows + 1):
+                y = y0 + r * row_h
+                page.draw_line(fitz.Point(x0, y), fitz.Point(x1, y),
+                               color=(0.55, 0.55, 0.62), width=1)
+                if r < rows:
+                    page.insert_text((x0 + 8, y + row_h * 0.7),
+                                     f"Vector row {r + 1} synthetic statement",
+                                     fontsize=10, fontname="helv")
+            page.draw_rect(fitz.Rect(x0, y0, x1, y1),
+                           color=(0.55, 0.55, 0.62), width=1.2)
         annot = spec.get("annot")
         if annot:
             r = fitz.Rect(*annot["rect"])
@@ -292,12 +308,27 @@ def build_full_workspace(root):
       q006 inferred swap, clean q img that cannot be trusted, no pair proof
                                          -> BLOCKED SOURCE_IMAGE_AMBIGUOUS
       q007 clean JPEG q img              -> Priority A eligible (PNG re-encode)
-      q008 vector exhibit page + real square annotation (marks) -> Priority B
+      q008 vector exhibit (exact crop; marker/stem ABOVE the table,
+           options + Correct Answer BELOW it, real square annotation over a
+           table row)                    -> Priority B eligible, EXACT crop
       q009 blurry clean q img            -> BLOCKED SOURCE_IMAGE_BLURRY
       q010 corrupt q img bytes           -> BLOCKED SOURCE_IMAGE_CORRUPT
       q011 only answer images (no q img) -> BLOCKED CLEAN_ASSET_MISSING
       q012 clean + marked pair among TWO q images -> Priority A picks the clean
       q013 low-contrast q img            -> BLOCKED SOURCE_IMAGE_LOW_CONTRAST
+      q014 rotated-90 vector exhibit page (twin of q008) -> Priority B exact
+           crop; the render must match the rotation-0 twin page render
+      q015 THE q074 REGRESSION: multi-question page carrying the PREVIOUS
+           question's visible "Correct Answer:" + Explanation tail, QUESTION
+           15, its vector exhibit, its options + own "Correct Answer:", and
+           the NEXT question's marker. The old whole-page fallback would
+           have rendered all of it; only an exact in-band crop is eligible
+      q016 exhibit-ref question whose marker sits at the very bottom of
+           the shared page (band too small, exhibit unverifiable) -> BLOCKED
+           QUESTION_CROP_UNVERIFIED
+      q017 exhibit-ref question WITHOUT a source_number in the upstream
+           record (no provenance for the marker) -> BLOCKED
+           QUESTION_CROP_UNVERIFIED
     Returns (facts dict with paths and expectations).
     """
     root = os.path.abspath(root)
@@ -353,12 +384,25 @@ def build_full_workspace(root):
         "q011": q(11, [11], [], ["p-011_1.png"]),
         "q012": q(12, [12], ["p-012_1.png", "p-012_2.png"], []),
         "q013": q(13, [13], ["p-013_1.png"], []),
+        "q014": q(14, [14], [], [],
+                  stem="Synthetic stem 14. Review the following exhibit and answer."),
+        "q015": q(15, [15], [], [],
+                  stem="Synthetic stem 15. Review the following exhibit and answer."),
+        "q016": q(16, [15, 16], [], [],
+                  stem="Synthetic stem 16. Study the following exhibit."),
+        # q017: NO source_number - marker provenance is missing on purpose
+        "q017": {"question_key": "q017", "source_number": None,
+                 "marker": "QUESTION n 17", "pages": [17],
+                 "stem": "Synthetic stem 17. See the following exhibit.",
+                 "options": {"a": "one", "b": "two"}, "answer_raw": "A",
+                 "question_images": [], "answer_images": [],
+                 "layout_profile": "question_n_correct_answer"},
     }
 
-    # synthetic PDF: page per question; exhibits embedded where the split
-    # says so (bytes-identical to the media files so xref provenance maps);
-    # q008 gets a vector exhibit page + a real square annotation marking a
-    # row (the "key" that annots=False must exclude).
+    # synthetic PDF: page per question (q015/q016 share page 15); exhibits
+    # embedded where the split says so (bytes-identical to the media files so
+    # xref provenance maps); vector-exhibit questions get an EXACTLY placed
+    # vector table inside their marker->answer band (reading flow +y).
     pages_spec = [{"text": [(60, 100, ["QUESTION 1", "Synthetic stem 1",
                                        "A. Synthetic option A", "B. Synthetic option B",
                                        "Correct Answer: A"])], "rotate": 90}]
@@ -382,9 +426,59 @@ def build_full_workspace(root):
             spec["images"] = spec.get("images", []) + [
                 ((60, 240 + i * 240, 552, 240 + i * 240 + 200), media[fname])]
         if qno == 8:
-            spec["vector_exhibit"] = True
-            spec["annot"] = {"rect": [45, 260, 300, 300], "type": "square"}
+            # exact-crop layout: marker+stem above the table, options+answer
+            # below it, and a real square annotation over a table row (the
+            # "key" annots=False must exclude)
+            spec["text"] = [
+                (60, 60, [f"QUESTION {qno}",
+                          f"Synthetic stem {qno}. Review the following exhibit and answer."]),
+                (60, 460, ["A. Synthetic option A", "B. Synthetic option B",
+                           "Correct Answer: A"])]
+            spec["vector_table"] = {"x0": 40, "y0": 120, "x1": 570, "y1": 400, "rows": 6}
+            spec["annot"] = {"rect": [45, 200, 300, 240], "type": "square"}
         pages_spec.append(spec)
+
+    # page 14 (q014): the rotation-90 twin of the q008 layout (annotation kept
+    # so the twin render comparison exercises the same exclusion)
+    pages_spec.append({
+        "rotate": 90,
+        "text": [(60, 60, ["QUESTION 14",
+                           "Synthetic stem 14. Review the following exhibit and answer."]),
+                 (60, 460, ["A. Synthetic option A", "B. Synthetic option B",
+                            "Correct Answer: A"])],
+        "vector_table": {"x0": 40, "y0": 120, "x1": 570, "y1": 400, "rows": 6},
+        "annot": {"rect": [45, 200, 300, 240], "type": "square"}})
+
+    # page 15 (q015 + q016 marker): THE q074 REGRESSION page - carries the
+    # PREVIOUS question's visible Correct Answer + Explanation tail at the
+    # top, QUESTION 15 + stem, the vector exhibit, q015's own options +
+    # Correct Answer, and the NEXT question's marker at the bottom
+    pages_spec.append({
+        "rotate": 90,
+        "text": [(60, 40, ["Correct Answer: D", "Explanation/Reference:"]),
+                 (60, 130, ["QUESTION 15",
+                            "Synthetic stem 15. Review the following exhibit and answer."]),
+                 (60, 480, ["A. Synthetic option A", "B. Synthetic option B",
+                            "Correct Answer: B"]),
+                 (60, 700, ["QUESTION 16",
+                            "Synthetic stem 16. Study the following exhibit."])],
+        "vector_table": {"x0": 40, "y0": 200, "x1": 570, "y1": 420, "rows": 6}})
+
+    # page 16 (q016 continuation): NO QUESTION 16 marker here - the exhibit
+    # cannot be source-verified on this page
+    pages_spec.append({
+        "rotate": 90,
+        "text": [(60, 60, ["Synthetic stem 16 continued from the previous page.",
+                           "A. Synthetic option A", "B. Synthetic option B",
+                           "Correct Answer: A"])]})
+
+    # page 17 (q017): a perfectly good exhibit page, but the upstream record
+    # has no source_number -> the marker cannot be tied to the question
+    pages_spec.append({
+        "rotate": 90,
+        "text": [(60, 60, ["QUESTION 17", "Synthetic stem 17. See the following exhibit."]),
+                 (60, 460, ["A. one", "B. two", "Correct Answer: A"])],
+        "vector_table": {"x0": 40, "y0": 120, "x1": 570, "y1": 400, "rows": 6}})
 
     pdf_path = os.path.join(root, "synthetic-exam.pdf")
     build_pdf(pdf_path, pages_spec=pages_spec)
@@ -429,6 +523,10 @@ def build_full_workspace(root):
         "q011": {"eligible": False, "reason": "CLEAN_ASSET_MISSING"},
         "q012": {"eligible": True, "method": "priority_a_direct_clean_source"},
         "q013": {"eligible": False, "reason": "SOURCE_IMAGE_LOW_CONTRAST"},
+        "q014": {"eligible": True, "method": "priority_b_annotation_free_render"},
+        "q015": {"eligible": True, "method": "priority_b_annotation_free_render"},
+        "q016": {"eligible": False, "reason": "QUESTION_CROP_UNVERIFIED"},
+        "q017": {"eligible": False, "reason": "QUESTION_CROP_UNVERIFIED"},
     }
     return {"root": root, "pdf": pdf_path, "config": cfg_path, "out_dir": out_dir,
             "media": {k: _sha(v) for k, v in media.items()}, "expectations": expectations}

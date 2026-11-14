@@ -97,7 +97,7 @@ class CliContractTests(unittest.TestCase):
             rc = self._run("scan", "--config", self.facts["config"], "--json")
         self.assertEqual(rc, 2)
         doc = json.loads(buf.getvalue())
-        self.assertEqual(doc["counts"]["blocked"], 7)
+        self.assertEqual(doc["counts"]["blocked"], 9)
 
     def test_prepare_dry_run_writes_no_files(self):
         out = os.path.join(self.root, "dryrun-out")
@@ -112,7 +112,7 @@ class CliContractTests(unittest.TestCase):
                        "--out-dir", out)
         self.assertEqual(rc, 2)
         self.assertTrue(os.path.isdir(out))
-        self.assertEqual(len(os.listdir(out)), 5)
+        self.assertEqual(len(os.listdir(out)), 7)
 
     def test_prepare_refuses_inside_upstream_workspace(self):
         cfg = json.load(open(self.facts["config"]))

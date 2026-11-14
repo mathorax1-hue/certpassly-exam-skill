@@ -16,10 +16,20 @@
     "blocked_reasons"
   ],
   "properties": {
-    "schema_version": { "const": "image-readiness-v1" },
-    "source_pdf_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-    "question_id": { "type": "string", "pattern": "^q[0-9]{3,}$" },
-    "requires_image": { "type": "boolean" },
+    "schema_version": {
+      "const": "image-readiness-v1"
+    },
+    "source_pdf_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "question_id": {
+      "type": "string",
+      "pattern": "^q[0-9]{3,}$"
+    },
+    "requires_image": {
+      "type": "boolean"
+    },
     "role_decisions": {
       "type": "array",
       "items": {
@@ -35,13 +45,46 @@
           "marking"
         ],
         "properties": {
-          "source_file": { "type": "string" },
-          "source_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-          "source_bytes": { "type": ["integer", "null"], "minimum": 0 },
-          "page": { "type": ["integer", "null"], "minimum": 1 },
-          "xref": { "type": ["integer", "null"], "minimum": 1 },
-          "assigned_role": { "enum": ["question_image", "answer_image"] },
-          "answer_image_inferred": { "type": "boolean" },
+          "source_file": {
+            "type": "string"
+          },
+          "source_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "source_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "xref": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "assigned_role": {
+            "enum": [
+              "question_image",
+              "answer_image"
+            ]
+          },
+          "answer_image_inferred": {
+            "type": "boolean"
+          },
           "verified_role": {
             "enum": [
               "source_original_private",
@@ -59,28 +102,78 @@
             ]
           },
           "marking": {
-            "type": ["object", "null"],
-            "required": ["detected_mark_boxes"],
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "detected_mark_boxes"
+            ],
             "properties": {
-              "detected_mark_boxes": { "type": "integer", "minimum": 0 },
-              "method": { "type": "string" },
-              "note": { "type": "string" }
+              "detected_mark_boxes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "method": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              }
             }
           },
-          "native_width": { "type": ["integer", "null"], "minimum": 1 },
-          "native_height": { "type": ["integer", "null"], "minimum": 1 },
-          "issues": { "type": "array", "items": { "type": "object" } },
-          "render_note": { "type": ["string", "null"] }
+          "native_width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "native_height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "render_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
     "clean_candidate": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "source_file": { "type": "string" },
-        "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "source_bytes": { "type": "integer", "minimum": 0 },
-        "xref": { "type": ["integer", "null"] },
+        "source_file": {
+          "type": "string"
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "xref": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "method": {
           "enum": [
             "priority_a_direct_clean_source",
@@ -88,24 +181,57 @@
             "priority_c_paired_clean_member"
           ]
         },
-        "pixel_source": { "enum": ["native_embedded_raster", "pdf_region_render"] },
-        "width": { "type": "integer", "minimum": 1 },
-        "height": { "type": "integer", "minimum": 1 },
-        "lossless_source": { "type": "boolean" },
-        "quality": { "type": "object" },
-        "note": { "type": ["string", "null"] }
+        "pixel_source": {
+          "enum": [
+            "native_embedded_raster",
+            "pdf_region_render"
+          ]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lossless_source": {
+          "type": "boolean"
+        },
+        "quality": {
+          "type": "object"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "is_learner_eligible": { "type": "boolean" },
-    "review_status": {
-      "enum": ["clean_ready", "clean_low_resolution", "blocked"]
+    "is_learner_eligible": {
+      "type": "boolean"
     },
-    "issues": { "type": "array", "items": { "type": "object" } },
+    "review_status": {
+      "enum": [
+        "clean_ready",
+        "clean_low_resolution",
+        "blocked"
+      ]
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "blocked_reasons": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["reason"],
+        "required": [
+          "reason"
+        ],
         "properties": {
           "reason": {
             "enum": [
@@ -119,13 +245,19 @@
               "SOURCE_IMAGE_TINY",
               "SOURCE_IMAGE_ASPECT_EXTREME",
               "SOURCE_ASSET_SHA_MISMATCH",
-              "SOURCE_IMAGE_CORRUPT"
+              "SOURCE_IMAGE_CORRUPT",
+              "QUESTION_CROP_UNVERIFIED",
+              "ANSWER_TEXT_IN_RENDER"
             ]
           },
-          "detail": { "type": "string" }
+          "detail": {
+            "type": "string"
+          }
         }
       }
     },
-    "note": { "type": "string" }
+    "note": {
+      "type": "string"
+    }
   }
 }
