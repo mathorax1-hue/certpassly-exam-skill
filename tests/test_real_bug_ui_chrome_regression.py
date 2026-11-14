@@ -15,11 +15,11 @@ except ImportError:
     VISUAL = False
 
 
-def menu(*, marked=False, thin_penned=False):
+def menu(*, marked=False, thin_penned=False, border_width=1):
     canvas = Image.new("RGB", (920, 300), "white")
     d = ImageDraw.Draw(canvas)
     # thin neutral UI drop-down and combo frame, from synthetic geometry
-    d.rectangle((280, 85, 670, 240), outline=(12, 12, 12), width=1)
+    d.rectangle((280, 85, 670, 240), outline=(12, 12, 12), width=border_width)
     d.line((280, 70, 670, 70), fill=(190, 190, 190), width=1)
     d.line((280, 70, 280, 85), fill=(190, 190, 190), width=1)
     d.line((670, 70, 670, 85), fill=(190, 190, 190), width=1)
@@ -58,6 +58,12 @@ def decorative_icons(*, selected=False, jpeg=False):
 class RealBugSyntheticRegression(unittest.TestCase):
     def test_plain_dropdown_border_is_not_ink_selection(self):
         self.assertEqual(0, detect_marks(menu())["detected_mark_boxes"])
+
+    def test_native_two_pixel_dropdown_border_not_pen_selected(self):
+        self.assertEqual(0, detect_marks(menu(border_width=2))["detected_mark_boxes"])
+
+    def test_native_three_pixel_dropdown_border_not_pen_selected(self):
+        self.assertEqual(0, detect_marks(menu(border_width=3))["detected_mark_boxes"])
 
     def test_thick_selection_frame_on_dropdown_is_detected(self):
         self.assertGreater(detect_marks(menu(marked=True))["detected_mark_boxes"], 0)
