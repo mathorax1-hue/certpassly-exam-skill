@@ -74,7 +74,7 @@ def audit_v2(directory):
         if not isinstance(learner, dict) or not learner:
             bad.append("missing learner payload")
         else:
-            if not isinstance(learner.get("prompt"), (str, dict, list)) and not learner.get("content"):
+            if not learner.get("stem") and not learner.get("prompt") and not learner.get("content"):
                 bad.append("learner prompt or content absent")
             for media in learner.get("media") or []:
                 if not isinstance(media, dict):
