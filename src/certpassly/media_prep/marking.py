@@ -124,6 +124,12 @@ def detect_marks(pil_rgb) -> dict:
             return False
         if area / float(w*h) > 0.088:
             return False  # thick overlay or too much ink connected to border
+        # Structural UI chrome is neutral. A saturated red/blue/green pen
+        # rectangle can be just as straight and thin as a dropdown border:
+        # do NOT exempt it. This caught a red-box regression on all 3 CI OSes.
+        spread_values = chan_spread[y:y+h, x:x+w][sub]
+        if spread_values.size == 0 or float(np.percentile(spread_values, 90)) > 45:
+            return False
         edge = (float(sub[0, :].mean()), float(sub[-1, :].mean()),
                 float(sub[:, 0].mean()), float(sub[:, -1].mean()))
         return sum(v >= 0.83 for v in edge) >= 3
