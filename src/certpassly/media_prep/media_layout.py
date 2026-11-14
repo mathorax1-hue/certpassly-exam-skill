@@ -160,7 +160,7 @@ def validate_layout(layout: dict, registry: dict, *, for_learner=True) -> dict:
             errors.append("media record must be an object")
             continue
         p = item.get("file")
-        if not isinstance(p, str) or not p or p.startswith("/") or "\\" in p or (
+        if not isinstance(p, str) or not p or p.startswith("/") or "://" in p or ":" in p or "\\" in p or (
             ".." in PurePosixPath(p).parts
         ) or PurePosixPath(p).suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
             errors.append("media.file must be safe local raster path")
