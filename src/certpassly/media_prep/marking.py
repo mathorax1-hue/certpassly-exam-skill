@@ -111,17 +111,18 @@ def detect_marks(pil_rgb) -> dict:
     min_area = min_area_rel * W * H
 
     def plain_menu_frame(x, y, w, h, sub, area):
-        """Ignore only a 1px, axis-aligned *structural* dropdown outline.
+        """Ignore only narrow, straight-edge *structural* dropdown outlines.
 
         Real menu screenshots contain three or four perfectly straight
-        component-boundary edges, but an answer-marked overlay is typically
-        thick, curved, broken or an inner rectangle. No generic dark ellipse
+        component-boundary edges (including slightly heavier native borders),
+        but an answer-marked overlay is typically thicker, curved, broken or
+        an inner rectangle. No generic dark ellipse
         or selected option is exempt. This is intentionally narrow: images
         without strong structural proof remain reviewer-only.
         """
         if w < 90 or h < 35 or w / float(h) < 1.1:
             return False
-        if area / float(w*h) > 0.044:
+        if area / float(w*h) > 0.088:
             return False  # thick overlay or too much ink connected to border
         edge = (float(sub[0, :].mean()), float(sub[-1, :].mean()),
                 float(sub[:, 0].mean()), float(sub[:, -1].mean()))
