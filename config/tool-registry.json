@@ -154,6 +154,28 @@
       "release_authority": false
     },
     {
+      "id": "media_prep_private_replay_cli",
+      "path": "scripts/replay_private_media.py",
+      "test": "tests/test_private_media_replay.py",
+      "command": "python scripts/replay_private_media.py --config /PRIVATE/media-prep-config.json --expected-source-assets 87 --expected-image-questions 44 (exit 0 machine-only complete, 2 blocked questions, 1 operational)",
+      "dependencies": "Python >=3.11 installed certpassly-exam-skill with pdf/visual extras; private original source; pinned upstream",
+      "side_effects": "calls private_source_replay only; writes private reviewer contact sheets/report with explicit Z.ai/human PENDING; NO auto publication/research/merge",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "media_prep_private_source_replay",
+      "path": "src/certpassly/media_prep/replay_audit.py",
+      "test": "tests/test_private_media_replay.py",
+      "command": "python scripts/replay_private_media.py --config /PRIVATE/media-prep-config.json --expected-source-assets 87 --expected-image-questions 44 [--gallery-folder builder-replay]",
+      "dependencies": "Python >=3.11, pinned PyMuPDF/Pillow/OpenCV/numpy visual extras; PINNED upstream extracted workspace and original private Git LFS PDF; previously saved original private image inventory and image-manifest-v1",
+      "side_effects": "READ-ONLY original source PDF/media and original upstream outputs; writes ONLY reviewer contact sheets and machine JSON to PRIVATE output.private_dir/builder-replay; never promotes, publishes, signs human approval, fetches network, or modifies candidates",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "media_prep_quality_responsive_audit",
       "path": "src/certpassly/media_prep/quality.py",
       "test": "tests/test_builder_quality_profiles.py",
