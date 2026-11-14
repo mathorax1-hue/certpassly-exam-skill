@@ -2,10 +2,15 @@
 from __future__ import annotations
 import io
 import unittest
-from PIL import Image, ImageDraw, ImageFilter
-
-from certpassly.media_prep.imageio import SourceImage
-from certpassly.media_prep.quality import responsive_density_matrix, region_blur_matrix
+try:
+    from PIL import Image, ImageDraw, ImageFilter
+    import cv2  # noqa: F401
+    import numpy  # noqa: F401
+    from certpassly.media_prep.imageio import SourceImage
+    from certpassly.media_prep.quality import responsive_density_matrix, region_blur_matrix
+    HAS_VISUAL = True
+except ImportError:
+    HAS_VISUAL = False
 
 
 def _image(w=900, h=600, *, blurred_bottom=False):
@@ -21,6 +26,7 @@ def _image(w=900, h=600, *, blurred_bottom=False):
     return SourceImage("synthetic.png", out.getvalue())
 
 
+@unittest.skipUnless(HAS_VISUAL, "requires Pillow and OpenCV")
 class ResponsiveQualityTests(unittest.TestCase):
     def test_native_613px_cannot_become_2x_640css_by_upscale(self):
         raw = _image(613, 400)
