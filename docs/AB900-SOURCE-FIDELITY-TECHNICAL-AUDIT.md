@@ -90,3 +90,25 @@ metadata as documented original CertPassly editorial replacements.
 An authored replacement does not need to match the PDF question it
 superseded. Neither the replacement provenance nor passing schema
 checks constitutes factual answer approval.
+
+## Offline V2 importer-contract projection
+
+The reusable `scripts/dry_run_question_v2_import_contract.py` creates an
+identity-and-hash report for all V2 questions. It maps `learner` into a
+candidate-only public-view shape and computes a separate server-answer digest.
+It deliberately emits **no answer keys** and does not import into the site.
+Every question on `cannot-convert.json` remains `source_review_blocked`.
+
+```bash
+python scripts/dry_run_question_v2_import_contract.py \
+  --v2-dir /private/raw/exams/AB-900/technical-v2-pilot/question-v2 \
+  --cannot-convert /private/raw/exams/AB-900/technical-v2-pilot/cannot-convert.json \
+  --output /private/raw/exams/AB-900/technical-v2-pilot/offline-importer-projection.json
+```
+
+Run the synthetic tests with
+`python -m unittest tests/test_dry_run_question_v2_import_contract.py -v`.
+Passing the offline projection proves neither a real site importer nor
+database persistence, encryption, browser interaction, deployment, or release
+security. Those tests must be performed against the actual authorized
+website/staging contract in a later controlled step.
