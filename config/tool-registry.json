@@ -121,6 +121,17 @@
       "release_authority": false
     },
     {
+      "id": "pinned_upstream_v2_hotfix",
+      "path": "scripts/patch_upstream_question_v2.py",
+      "test": "tests/test_upstream_v2_patch.py",
+      "command": "python scripts/patch_upstream_question_v2.py --upstream /path/to/clean/pinned/checkout",
+      "dependencies": "Python 3.11+ stdlib and Git; immutable upstream source pinned to 462fd237ae7f0c607bb00229e173b22d0f3298d2",
+      "side_effects": "Refuses mismatched/dirty checkout; patches only two Python files of temporary external checkout; no private exam data",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "public_file_safety",
       "path": "scripts/check_public_safety.py",
       "test": "tests/test_cli.py",
@@ -160,6 +171,17 @@
       "command": "python scripts/verify_tool_registry.py",
       "dependencies": "stdlib",
       "side_effects": "read-only public registry audit",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "upstream_v2_contract_audit",
+      "path": "scripts/audit_upstream_question_v2.py",
+      "test": "tests/test_upstream_v2_gate.py",
+      "command": "python scripts/audit_upstream_question_v2.py --upstream /path/to/pinned/checkout --output v2-synthetic-audit.json",
+      "dependencies": "Python >=3.11, Git; external immutable upstream checkout, jsonschema>=4.22,<5",
+      "side_effects": "read-only pinned upstream input and synthetic test data; writes local JSON report, no private assets or publication",
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
