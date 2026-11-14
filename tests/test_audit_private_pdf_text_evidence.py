@@ -20,7 +20,7 @@ class PDFTextEvidenceTests(unittest.TestCase):
 
     def test_token_overlap_is_evidence_not_approval(self):
         self.assertTrue("purview" in mod.tokens("Microsoft Purview content"))
-        self.assertEqual(mod.tokens("The answer is yes"), {"answer"}.intersection({"the"}) if False else {"answer"})
+        self.assertEqual(mod.tokens("The answer is yes"), set())
         content = {"prompt": "Choose", "rows": [{"id": "r1", "text": "Row one"}],
                    "answer_key": {"correct": "do not expose"}}
         joined = " ".join(mod.flatten_content(content))
