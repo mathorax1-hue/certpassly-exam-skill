@@ -13,7 +13,7 @@ class TranscriptionTests(unittest.TestCase):
     def doc(self, folder, kind="inline_dropdown", choices=None, prompt="Choose {{blank1}}"):
         value = {"question_key":"q001","version":1,"type":kind,
                  "learner":{"interaction":{"prompt_with_slots":prompt,"slots":[{"id":"blank1","input":"dropdown",
-                    "choices":[{"id":"c1","text":"Alpha"},{"id":"c2","text":"Beta"}] if choices is None else choices]}}}
+                    "choices":[{"id":"c1","text":"Alpha"},{"id":"c2","text":"Beta"}] if choices is None else choices}]}}}
         Path(folder, "q001.v1.json").write_text(json.dumps(value), encoding="utf-8")
 
     def test_exact_choices_and_template_consistent_but_not_pdf_approved(self):
