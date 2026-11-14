@@ -483,3 +483,44 @@ def enforce(report: dict) -> None:
             f"PRIVACY GATE REFUSED the learner package "
             f"({len(report.get('problems') or [])} hard problem(s), "
             f"{len(report.get('flags') or [])} scoring flag(s)):\n{lines}")
+
+
+def verify_release_candidate(manifest_path: str, package_path: str, *,
+                             source_pdf: str, source_receipt: str,
+                             manifest_key_env: str = "CERTPASSLY_MANIFEST_KEY") -> dict:
+    """B5 mandatory strict technical preflight, never release authorization.
+
+    The convenience verify_package API permits synthetic tests without an
+    external receipt. THIS ENTRYPOINT DOES NOT: a genuine local PDF,
+    independently pinned source receipt and out-of-package HMAC signing key
+    are mandatory. The PDF file itself is rehashed before any image check.
+
+    A passing report means only media/privacy technical preflight succeeded.
+    Human answers, rights, import staging and live site UI remain UNTESTED.
+    """
+    import hashlib
+    if not source_pdf or not os.path.isfile(source_pdf):
+        raise PrivacyViolationError("trusted original source_pdf required")
+    if not source_receipt or not os.path.isfile(source_receipt):
+        raise PrivacyViolationError("independent source_receipt required")
+    manifest = load_manifest(manifest_path, require_package_integrity=True)
+    digest = hashlib.sha256()
+    size = 0
+    with open(source_pdf, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            size += len(block)
+            digest.update(block)
+    if digest.hexdigest() != manifest.get("source_pdf_sha256") or (
+        size != manifest.get("source_pdf_bytes")
+    ):
+        raise PrivacyViolationError("original PDF bytes/SHA do not match the "
+                                    "immutable media manifest identity")
+    report = verify_package(
+        manifest_path, package_path, allow_external_urls=False,
+        source_pdf=source_pdf, source_receipt=source_receipt,
+        require_package_integrity=True, require_receipt=True,
+        manifest_key_env=manifest_key_env, content_reverification=True)
+    report["technical_privacy_preflight"] = "PASS" if report["passed"] else "BLOCKED"
+    report["site_ui_status"] = "UNTESTED"
+    report["human_approval_status"] = "NOT_APPROVED"
+    return report
