@@ -234,3 +234,42 @@ exact crops, and the quarantined pre-correction outputs are retained separately.
 **Verified:** 86/86 media-prep synthetic tests OK (25 inventory + 10 quality + 22
 privacy + 16 e2e + 13 cli) plus 247 pre-existing repo tests; real pinned-upstream
 integration OK; whole-repo discover 333/333 OK. Deterministic double-run byte-identical.
+
+## 2026-11-14 — Synthetically reproduced UI-chrome false positives and image-set completeness
+
+**Observed (PRIVATE two-original-PDF pilot, not exported as public fixtures):**
+Some clean question screenshots of dropdown menus and colorful application
+navigation icons were falsely labeled as marked answers. The root cause was a
+shape-only detector that treated perfectly regular dark menu rectangles or
+saturated decorative icons as answer-selection marks. Additional audit found
+the legacy single-image candidate contract could silently omit a second
+distinct, required clean source exhibit.
+
+**Correction:** Dark, axis-aligned, relatively low-density menu outline
+components are recognized as neutral structural chrome only if at least
+three straight boundary edges are demonstrated; thick irregular hand-ink
+choice boxes, ellipses and answer-reference overlays remain blocked. Compact
+saturated fills are recognized as selected controls only with neutral
+enclosing selector geometry; hollow pen rings, colored highlights and
+solid dark strokes have separate guards. A new
+`MULTI_EXHIBIT_MAPPING_REQUIRED` blocker categorically refuses to mark a
+question eligible when the original provenance has two or more distinct,
+verified-clean question image sources but the current learner/site contract
+supports only one image. No image merging, erasing, fake upscaling or PDF text
+redaction is permitted.
+
+**Reproduce publicly without private data:**
+`python -m unittest tests.test_real_bug_ui_chrome_regression
+tests.test_builder_b0_marks tests.test_builder_chromatic_marks
+tests.test_media_prep_inventory -v` in a checkout with
+`python -m pip install -e '.[phase1,visual]'`.
+Required `.github/workflows/media-prep-ci.yml` runs on Linux 3.11, 3.13
+and Windows 3.11. Raw original PDF replay and independently required
+approval are performed in the PRIVATE raw-exam repository only.
+
+**Release limitation:** Static raster heuristics are conservative, not
+semantic source-of-truth for every screenshot or interactive simulator type.
+Protect against false negatives via source-backed independent review, strict
+private receipt and content privacy gates and real website acceptance. A
+blocked low-resolution or unverifiable-cross-page exhibit cannot be made
+authentic by changing display pixels; obtain an authorized clean original.
