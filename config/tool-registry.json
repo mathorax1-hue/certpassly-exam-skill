@@ -88,6 +88,17 @@
       "release_authority": false
     },
     {
+      "id": "media_layout_cli",
+      "path": "scripts/validate_media_layout.py",
+      "test": "tests/test_media_layout_cli.py",
+      "command": "python scripts/validate_media_layout.py --registry PINNED-UPSTREAM/reference/site-format/v1/question_types.json --layout PRIVATE/media-layout-v1.json [--report PRIVATE/report.json] (0 type-contract PASS only, 2 BLOCKED, 1 operational)",
+      "dependencies": "Python >=3.11 stdlib; original external upstream pinned type registry; certpassly-exam-skill editable src install",
+      "side_effects": "Read-only on registry and media layout; optional local JSON technical report; no network, key inference, site import or release",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "media_prep_30_type_layout_adapter",
       "path": "src/certpassly/media_prep/media_layout.py",
       "test": "tests/test_media_layout_contract.py",
