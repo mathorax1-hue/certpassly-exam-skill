@@ -10,7 +10,7 @@ tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
 
 def doc(kind, interaction):
-    return {"question_key": "q001", "type": kind, "learner":
+    return {"question_key": "q001", "version": 1, "type": kind, "learner":
             {"stem": {"format": "html", "text": "<p>Prompt</p>"},
              "interaction": interaction}}
 
