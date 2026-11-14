@@ -1,0 +1,87 @@
+name: CertPassly media-prep CI - synthetic image suite
+on:
+  push:
+    branches: [main, "zai/**"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: media-prep-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  media-prep:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: "3.11"
+          - os: ubuntu-24.04
+            python: "3.13"
+          - os: windows-latest
+            python: "3.11"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install system prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q poppler-utils
+      - name: Install image extras
+        run: python -m pip install -e ".[phase1,visual]" && python -m pip check
+      - name: Doctor (image environment must be ready)
+        run: python -m certpassly.media_prep doctor
+      - name: Run media-prep synthetic suites (unexpected skips are failures)
+        shell: bash
+        run: |
+          set -u
+          python -m unittest tests.test_media_prep_inventory tests.test_media_prep_quality tests.test_media_prep_privacy tests.test_media_prep_e2e tests.test_media_prep_cli -v > "$RUNNER_TEMP/unittest.log" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/unittest.log"
+          echo "unittest exit code: $rc"
+          if [ $rc -ne 0 ]; then exit $rc; fi
+          # unexpected skips are failures; the ONLY allowed skips are the two
+          # env-gated real-upstream integration tests (run separately on Linux)
+          bad_skips=$(grep " ... skipped" "$RUNNER_TEMP/unittest.log" | grep -v "RealUpstreamIntegrationTests" | grep -v "CERTPASSLY_UPSTREAM_SCRIPTS not set" || true)
+          if [ -n "$bad_skips" ]; then
+            echo "ERROR: unexpected skipped test(s):"
+            echo "$bad_skips"
+            exit 1
+          fi
+      - name: Pinned real-upstream integration (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          git clone https://github.com/msaqlainhaneef1/certpassly-exam-pipeline.git /tmp/upstream
+          git -C /tmp/upstream checkout --detach 13dea6bab662ab1c4bbf87017e912e519907c8bc
+          test "$(git -C /tmp/upstream rev-parse HEAD)" = "13dea6bab662ab1c4bbf87017e912e519907c8bc"
+          pdftohtml -v
+          CERTPASSLY_UPSTREAM_SCRIPTS=/tmp/upstream/scripts \
+            python -m unittest tests.test_media_prep_e2e.RealUpstreamIntegrationTests -v
+      - name: CLI walkthrough on the synthetic example
+        shell: bash
+        run: |
+          set -e
+          python tests/media_prep_fixture.py --out "$RUNNER_TEMP/mp-demo"
+          cfg="$RUNNER_TEMP/mp-demo/media-prep-config.json"
+          rc=0; python -m certpassly.media_prep scan --config "$cfg" --explain || rc=$?
+          if [ $rc -ne 0 ] && [ $rc -ne 2 ]; then echo "scan exit $rc"; exit $rc; fi
+          rc=0; python -m certpassly.media_prep prepare --config "$cfg" --explain || rc=$?
+          if [ $rc -ne 0 ] && [ $rc -ne 2 ]; then echo "prepare exit $rc"; exit $rc; fi
+          ls "$RUNNER_TEMP/mp-demo/prepared/clean"
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+      - name: Registry, safety and compile checks
+        shell: bash
+        run: |
+          python scripts/verify_tool_registry.py
+          python scripts/check_public_safety.py
+          python -m compileall -q scripts src

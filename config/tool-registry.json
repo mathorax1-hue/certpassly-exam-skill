@@ -284,6 +284,50 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "media_prep_source_scan",
+      "path": "src/certpassly/media_prep/source_inventory.py",
+      "test": "tests/test_media_prep_inventory.py",
+      "command": "python -m certpassly.media_prep scan --config PRIVATE/media-prep-config.json [--output readiness.json --explain --force-extract] (read-only; exit 0 clean, 2 blocked questions, 1 operational)",
+      "dependencies": "Python >=3.11; pdf + visual extras (PyMuPDF>=1.26,<1.27, Pillow, numpy, opencv-python-headless); optional pinned upstream checkout for run_extract",
+      "side_effects": "read-only on the PDF and upstream workspace; optional --output JSON write; may run the PINNED external upstream extract_owner_pdf.py via subprocess when configured (never reimplements it); never modifies sources",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "media_prep_selection_prepare",
+      "path": "src/certpassly/media_prep/selection.py",
+      "test": "tests/test_media_prep_e2e.py",
+      "command": "python -m certpassly.media_prep prepare --config PRIVATE/media-prep-config.json [--out-dir DIR --dry-run --explain] (writes ONLY verified clean candidates + manifest + inventory; exit 0/2/1)",
+      "dependencies": "Python >=3.11; pdf + visual extras; same pinned upstream output contract as scan",
+      "side_effects": "writes clean_dir (verified learner candidates only; every render is an EXACT source-verified exhibit crop - whole-page renders are categorically refused, P0 correction 2026-11-14), private_dir/reviewer-only (isolated marked/answer copies), manifest (with package_integrity_sha256 and optional HMAC receipt from the manifest_key_env variable) and inventory JSON (atomic, deterministic, byte-identical on rerun); refuses to write inside the upstream workspace; no network, no AI, no inpainting, no upscaling",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "media_prep_privacy_gate",
+      "path": "src/certpassly/media_prep/privacy_gate.py",
+      "test": "tests/test_media_prep_privacy.py",
+      "command": "python -m certpassly.media_prep verify-package --config PRIVATE/media-prep-config.json --package DRAFT.zip [--report report.json] (strict allowlist gate; exit 0 pass, 3 privacy/integrity/tamper refusal, 1 operational)",
+      "dependencies": "Python >=3.11 standard library (zipfile/json/re/hashlib/hmac) + PyMuPDF for pinned-source content re-verification of allowlisted members",
+      "side_effects": "read-only on the package and manifest; optional --report JSON; fail-closed exit 3 with per-member reasons (reviewer-only SHA, unallowlisted image, traversal, symlink, nested zip, external URL, duplicate identity, publish flag, manifest tamper, answer text in render, crop unverified, raster provenance mismatch, marked image in allowlist, receipt/source-receipt failures); scoring-key flags FAIL report.passed and enforce() for direct library callers exactly like the CLI (P0 correction 2026-11-14); every allowlisted member is content-re-verified against the pinned source PDF (rendered crops re-checked for answer/marker text; raster members re-matched to embedded PDF images and re-run through mark detection)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "media_prep_doctor",
+      "path": "src/certpassly/media_prep/cli.py",
+      "test": "tests/test_media_prep_cli.py",
+      "command": "python -m certpassly.media_prep doctor [--json --config PRIVATE/media-prep-config.json]",
+      "dependencies": "Python >=3.11 (stdlib for doctor; modules reported as present/absent)",
+      "side_effects": "none (read-only inventory of python modules, system tools, schema versions, pinned upstream checkout status)",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }

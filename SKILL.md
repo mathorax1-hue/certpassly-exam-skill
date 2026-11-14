@@ -24,6 +24,10 @@ Read `AGENTS.md`, `knowledge/AB900-LESSONS.md`, `knowledge/ENGINEERING-HISTORY.m
 8. Final import conformance, screenshot scoring, reviewer attestation, and protected approval remain **separate private gates**.
 9. Never promote, publish, or claim `100% ready` when any gate is unresolved.
 
+## Non-AI clean simulator images (media_prep)
+
+For visual questions, use `python -m certpassly.media_prep` (scan / prepare / verify-package) on top of the pinned upstream extraction before any bank/import step. It selects only provably unmarked learner images (strict A/B/C/D priority), blocks every ambiguous or marked-only case with a stable reason code, isolates reviewer-only media outside any package root, and refuses learner packages that contain marked bytes or unallowlisted references. It is NOT answer research, NOT AI authoring, and grants no release authority. Docs: docs/NONAI-SIMULATOR-IMAGES.md, docs/NONAI-IMAGE-OPERATOR-RUNBOOK.md, docs/NONAI-IMAGE-TEST-PLAN.md.
+
 ## Conversation-history recovery (required for authorized handovers)
 
 Read docs/CONVERSATION-ARCHIVE-PROTOCOL.md and the private raw-exam master, not only the tool registry. All actual conversations, owner source and embedded evidence stay PRIVATE. Preserve the single existing master in-place via scripts/append_conversation_history.py, with preview, authenticated event provenance, explicit --apply, readback and matching private GitHub/Library copies when both are accessible. Recording conversation context is not model retraining or automatic account-wide export.

@@ -15,6 +15,7 @@ This repository is the **canonical** home for new reusable CertPassly tools, tes
 - [Tool hub and evidence schemas](docs/TOOL-HUB.md): exact commands for official source capture, offline receipt verification, option-by-option audits, visual role reconciliation, ledger preflight and artifact archive organization.
 - [Phase 1 PDF extraction toolkit](docs/PHASE1-EXTRACTION.md): config-driven, fail-closed extraction of owner exam PDFs into a private structured/v1 layer (`certpassly phase1-audit` / `phase1-extract`); strictly local, no release authority.
 - [Dependencies and installation](docs/DEPENDENCIES.md): core Python 3.11+, optional PDF, visual, browser, MCP and developer extras.
+- [Non-AI clean simulator images](docs/NONAI-SIMULATOR-IMAGES.md): `certpassly.media_prep` scan/prepare/verify-package - deterministic clean-image selection, 300-DPI annotation-free renders, quality gates and the hard answer-image privacy allowlist on the pinned upstream extraction ([operator runbook](docs/NONAI-IMAGE-OPERATOR-RUNBOOK.md), [test plan](docs/NONAI-IMAGE-TEST-PLAN.md)).
 - [Four-repo integration playbook](docs/INTEGRATION-PLAYBOOK.md): private verification, raw-to-ready gates, rollback and no publication.
 - [Engineering history](knowledge/ENGINEERING-HISTORY.md): observed failures, tested fixes, CI links, open gaps and permanent safeguards.
 - [AI session recovery](docs/AI-SESSION-RECOVERY.md): new-session restart order and private handover pointer.

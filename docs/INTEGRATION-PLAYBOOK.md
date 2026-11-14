@@ -11,6 +11,10 @@ This guide covers engineering, private exam review, evidence auditing and safe h
 
 An existing GitHub Actions workflow may check out a different legacy pipeline at an immutable revision. That is an **actual runtime fact**, not permission to push to the old repo, replace a protected gate, or assume our latest new skill scripts are already deployed. See the live raw-exam .github/workflows/process-exams.yml and config/repositories.json before proposing changes.
 
+## Non-AI clean simulator images before any bank/import step
+
+For exams whose questions carry exhibits or answer-area screenshots, run the media-prep subsystem BEFORE the upstream bank/import stages: `certpassly.media_prep scan` (read-only role inventory), `prepare` (verified clean candidates + isolated reviewer-only copies + tamper-evident manifest), then build the draft package ONLY from `prepared/clean` + the manifest allowlist and gate it with `verify-package` (exit 3 = refusal, never bypassed). Marked/reviewer-only media never enters a learner archive, and blocked questions stay counted and visible instead of guessed. See [NONAI-SIMULATOR-IMAGES.md](NONAI-SIMULATOR-IMAGES.md) and the [operator runbook](NONAI-IMAGE-OPERATOR-RUNBOOK.md). No research, no answer writing, no publication authority is granted by a passing gate.
+
 ## Reusable skill engineering pass
 
 - Find an existing implementation in tool-registry.json or the public processor. Prefer extending it to inventing a duplicate.

@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mathorax1-hue/certpassly-exam-skill/raw/main/src/certpassly/media_prep/schemas/image-manifest-v1.schema.json",
+  "title": "CertPassly clean-image manifest v1 (prepare output)",
+  "description": "Tamper-evident manifest emitted by certpassly.media_prep prepare. integrity.entries_sha256 is the legacy partial digest (questions array); integrity.package_integrity_sha256 covers ALL security-critical fields (questions, reviewer_only_assets, counts, exam identity, pins) and verify-package recomputes both, refusing (exit 3) on any mismatch. integrity.receipt_sha256_hmac is the optional HMAC-SHA256 receipt keyed by a secret held OUTSIDE the package; when privacy.require_receipt is true it must validate. Self-declared digests are complemented by pinned-source CONTENT re-verification of every allowlisted member, so a fully regenerated manifest around a leaky or marked image is still refused.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "exam_code",
+    "source_pdf_sha256",
+    "source_pdf_bytes",
+    "generated_by",
+    "questions",
+    "reviewer_only_assets",
+    "counts",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": "image-manifest-v1" },
+    "exam_code": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+    "source_pdf_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "source_pdf_bytes": { "type": "integer", "minimum": 1 },
+    "generated_by": {
+      "type": "object",
+      "required": ["toolkit", "version"],
+      "properties": {
+        "toolkit": { "const": "certpassly-media-prep" },
+        "version": { "type": "string" },
+        "upstream_repo": { "type": "string" },
+        "upstream_commit": { "type": ["string", "null"] },
+        "upstream_run": { "type": "object" }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "source_pdf_sha256",
+          "question_id",
+          "is_learner_eligible",
+          "review_status"
+        ],
+        "properties": {
+          "schema_version": { "const": "image-readiness-v1" },
+          "source_pdf_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "question_id": { "type": "string" },
+          "clean_candidate": {
+            "type": ["object", "null"],
+            "required": ["method"],
+            "if": { "required": ["file"] },
+            "then": { "required": ["file", "sha256", "bytes"] },
+            "properties": {
+              "file": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "bytes": { "type": "integer", "minimum": 1 },
+              "method": { "type": "string" },
+              "pixel_source": { "type": "string" },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "source_file": { "type": "string" },
+              "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "quality": { "type": "object" },
+              "render": {
+                "type": "object",
+                "description": "Exact render geometry (P0 correction) so the privacy gate can re-verify the crop against the pinned source PDF",
+                "properties": {
+                  "page": { "type": "integer", "minimum": 1 },
+                  "clip": { "type": "array", "items": { "type": "number" } },
+                  "clip_unrotated": { "type": "array", "items": { "type": "number" } },
+                  "dpi": { "type": "integer", "minimum": 1 },
+                  "page_rotation_deg": { "type": "integer" },
+                  "source_number": { "type": ["integer", "null"] }
+                }
+              }
+            }
+          },
+          "is_learner_eligible": { "type": "boolean" },
+          "review_status": { "enum": ["clean_ready", "clean_low_resolution", "blocked"] }
+        }
+      }
+    },
+    "reviewer_only_assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": [
+        "questions_total",
+        "questions_requiring_image",
+        "learner_eligible",
+        "blocked",
+        "blocked_question_ids",
+        "clean_files_written"
+      ],
+      "properties": {
+        "questions_total": { "type": "integer", "minimum": 0 },
+        "questions_requiring_image": { "type": "integer", "minimum": 0 },
+        "learner_eligible": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "blocked_question_ids": { "type": "array", "items": { "type": "string" } },
+        "clean_files_written": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["entries_sha256", "package_integrity_sha256", "algorithm"],
+      "properties": {
+        "entries_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "algorithm_entries": { "type": "string" },
+        "package_integrity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "algorithm": { "type": "string" },
+        "receipt_sha256_hmac": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "receipt_key_id": { "type": "string" },
+        "receipt_algorithm": { "type": "string" }
+      }
+    }
+  }
+}

@@ -34,6 +34,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "certpassly.phase1" = ["templates/*.json"]
+"certpassly.media_prep" = ["schemas/*.json"]
 
 [tool.ruff]
 line-length = 110

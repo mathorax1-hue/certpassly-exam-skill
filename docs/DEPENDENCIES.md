@@ -59,6 +59,18 @@ and a full synthetic test run; never `pip install -U` unpinned in a working
 environment. Install once per commit and reuse the venv/pip cache; see
 [PHASE1-EXTRACTION.md](PHASE1-EXTRACTION.md#installation-once-per-commit-caching-and-reuse).
 
+## Media-prep subsystem dependencies (pinned ranges)
+
+`certpassly.media_prep` reuses the SAME pins as the phase1 toolkit plus OpenCV; install with `python -m pip install -e ".[phase1,visual]"` (the `visual` extra contributes opencv-python-headless). `doctor` and config validation are stdlib-only; `scan`/`prepare` need the extras and say so with an explicit error instead of failing silently. The pinned external upstream checkout (see NONAI-IMAGE-OPERATOR-RUNBOOK.md) is needed only when `upstream.run_extract=true`; it stays a read-only external dependency and is never vendored.
+
+| Package | Allowed range | Why |
+| --- | --- | --- |
+| PyMuPDF | >=1.26,<1.27 | xref/placement mapping, 300-DPI annotation-free renders (same rotated-page pin as phase1) |
+| Pillow | >=10,<13 | decode, alpha flatten, lossless PNG re-encode |
+| numpy | >=1.26,<3 | pixel comparisons |
+| opencv-python-headless | >=4.9,<5 | connected-component mark detection, ORB/RANSAC pair registration, quality metrics |
+| jsonschema | >=4.20,<5 | readiness/manifest/config schema validation in tests |
+
 ## Persistent developer environments and reusable installation (owner directive, 2026-11-12)
 
 **Goal:** Install once when the environment is correct, then reuse it. Git tracks **source, manifests, commands, tests and provenance**, not a copied Python virtual environment or system binaries. The developer's existing secure workstation/VM/server is the primary build and synthetic-test environment. GitHub Actions is optional for synthetic corroboration; protected checks remain required where the release contract calls for them.
