@@ -43,7 +43,7 @@ jobs:
         run: |
           set -u
           set +e  # preserve failing test output and exit receipt
-          python -m unittest tests.test_media_prep_inventory tests.test_media_prep_quality tests.test_media_prep_privacy tests.test_media_prep_e2e tests.test_media_prep_cli tests.test_builder_b0_marks tests.test_builder_chromatic_marks tests.test_builder_quality_profiles tests.test_media_layout_contract tests.test_upstream_media_projection tests.test_interaction_audit tests.test_media_layout_cli tests.test_media_layout_schema tests.test_builder_release_gate tests.test_private_media_replay -v > "$RUNNER_TEMP/unittest.log" 2>&1
+          python -m unittest tests.test_media_prep_inventory tests.test_media_prep_quality tests.test_media_prep_privacy tests.test_media_prep_e2e tests.test_media_prep_cli tests.test_builder_b0_marks tests.test_builder_chromatic_marks tests.test_real_bug_ui_chrome_regression tests.test_builder_quality_profiles tests.test_media_layout_contract tests.test_upstream_media_projection tests.test_interaction_audit tests.test_media_layout_cli tests.test_media_layout_schema tests.test_builder_release_gate tests.test_private_media_replay -v > "$RUNNER_TEMP/unittest.log" 2>&1
           rc=$?
           set -e
           cat "$RUNNER_TEMP/unittest.log"

@@ -54,6 +54,25 @@ class ProcessingMatrixTests(unittest.TestCase):
     def _q(self, qid):
         return self.ready[qid]
 
+    def test_b7_distinct_clean_multi_exhibits_must_not_ship_one(self):
+        """Two different required clean source images cannot become one image.
+
+        The source images here are already in the SYNTHETIC PDF fixture; no
+        original exam content is embedded in this public regression.
+        """
+        import copy
+        inv=copy.deepcopy(self.inv)
+        independent=copy.deepcopy(inv["questions"]["q007"]["usage"][0])
+        self.assertEqual(independent["role"], "question_image")
+        self.assertFalse(independent.get("answer_image_inferred"))
+        inv["questions"]["q012"]["usage"].append(independent)
+        q=run_selection(self.cfg, inv)["q012"]
+        self.assertFalse(q["is_learner_eligible"],
+                         "single-image output silently omitted a second required source")
+        self.assertIsNone(q["clean_candidate"])
+        self.assertIn("MULTI_EXHIBIT_MAPPING_REQUIRED",
+                      [x["reason"] for x in q["blocked_reasons"]])
+
     def test_a01_clean_plus_marked_pair_chooses_clean(self):
         """q005: marked q image + clean registered answer copy -> Priority C clean member."""
         r = self._q("q005")
