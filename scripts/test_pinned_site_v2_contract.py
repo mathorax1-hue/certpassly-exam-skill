@@ -63,9 +63,51 @@ def main(argv):
                 failures.append("HTML mutation not rejected: "+example.name)
             if document is original:
                 failures.append("unexpected identity")
+    # Verify the canonical upstream package guard with the *technical V2*
+    # isolation policy. Do not alter the guard or allow email in a V2 deliverable.
+    import zipfile
+    sys.path.insert(0, str((upstream / "scripts").resolve()))
+    import package_guard as pg
+    policy={"brand_denylist":[],"policy":{"contact_patterns":{
+        "email":r"[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"}}}
+    policy_config={"package_exclude":[
+        "questions.json","extracted/**","export/**","media/src/*"]}
+    with tempfile.TemporaryDirectory() as tmp:
+        root=Path(tmp)
+        stage=root/"staging"
+        stage.mkdir()
+        (stage/"extracted/items").mkdir(parents=True)
+        (stage/"export").mkdir()
+        (stage/"media/src").mkdir(parents=True)
+        v2=stage/"AB-900.site-format.v2.json"
+        v2.write_text('{"exam":{"exam_code":"SYN-001"},"questions":[]}')
+        for name in ("questions.json","extracted/items/q081.json","export/fidelity.json"):
+            (stage/name).write_text('{"private_example":"synthetic@sample.invalid"}')
+        (stage/"media/src"/"source.jpg").write_bytes(b"not-a-real-image")
+        excluded=pg.prepare(str(stage),policy,policy_config,log=lambda *_:None)
+        excluded_set={v["path"] for v in excluded}
+        if not {"questions.json","extracted/items/q081.json","export/fidelity.json","media/src/source.jpg"} <= excluded_set:
+            failures.append("diagnostic content not fully excluded from technical V2 package")
+        bundle=root/"technical-v2.zip"
+        def write_zip():
+            with zipfile.ZipFile(bundle,"w",zipfile.ZIP_DEFLATED) as z:
+                for p in stage.rglob("*"):
+                    if p.is_file(): z.write(p,p.relative_to(stage).as_posix())
+        write_zip()
+        clean=pg.scan_zip(str(bundle),policy)
+        if clean["hits"]:
+            failures.append("clean technical V2 package falsely failed")
+        # Negative test: unsafe content in candidate-facing JSON remains forbidden.
+        v2.write_text('{"exam":{"exam_code":"SYN-001"},"candidate":"synthetic@sample.invalid"}')
+        write_zip()
+        unsafe=pg.scan_zip(str(bundle),policy)
+        if not unsafe["hits"]:
+            failures.append("malicious V2 deliverable bypassed canonical package guard")
+    packaging={"private_diagnostics_excluded":len(excluded_set),
+               "clean_hits":len(clean["hits"]),"negative_deliverable_hits":len(unsafe["hits"])}
     print(json.dumps({"pinned_contract":str(upstream),"valid_exam_fixtures":len(examples),
                       "negative_html_mutations":len(examples),"failures":failures,
-                      "outcomes":outcomes},indent=2))
+                      "packaging":packaging,"outcomes":outcomes},indent=2))
     return 1 if failures else 0
 
 if __name__=="__main__":
