@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import fitz
@@ -44,6 +46,33 @@ class HeldSourceAuditTests(unittest.TestCase):
         self.assertEqual(result["questions"][0]["source_images"][0]["pdf_page"], 1)
         self.assertTrue(all(q["original_held"] and not q["publishable"]
                             for q in result["questions"]))
+
+    @patch("scripts.audit_held_pdf_source_regions.subprocess.run")
+    def test_ocr_word_tokenizer_records_actual_words(self, mocked):
+        mocked.side_effect = [
+            SimpleNamespace(stdout=b"Two actual words"),
+            SimpleNamespace(stdout=b"Two actual words"),
+        ]
+        report = audit(self.pdf, self.held, self.good_hash, ocr=True, max_ocr=1)
+        self.assertEqual(report["ocr_regions_tested"], 1)
+        self.assertEqual(report["ocr_regions_with_pass_agreement"], 1)
+        record = next(region for q in report["questions"]
+                      for im in q["source_images"] for region in im["candidates"]
+                      if "ocr_pass_agreement" in region)
+        self.assertEqual(record["ocr_word_counts"], [3, 3])
+        self.assertFalse(record["ocr_empty_output"])
+
+    @patch("scripts.audit_held_pdf_source_regions.subprocess.run")
+    def test_empty_ocr_cannot_be_counted_as_agreement(self, mocked):
+        mocked.return_value = SimpleNamespace(stdout=b"")
+        report = audit(self.pdf, self.held, self.good_hash, ocr=True, max_ocr=1)
+        self.assertEqual(report["ocr_regions_tested"], 1)
+        self.assertEqual(report["ocr_regions_with_pass_agreement"], 0)
+        record = next(region for q in report["questions"]
+                      for im in q["source_images"] for region in im["candidates"]
+                      if "ocr_pass_agreement" in region)
+        self.assertTrue(record["ocr_empty_output"])
+        self.assertFalse(record["ocr_pass_agreement"])
 
     def test_source_hash_tampering_refused(self):
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
