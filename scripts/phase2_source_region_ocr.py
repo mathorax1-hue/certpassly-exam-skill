@@ -14,7 +14,11 @@ import tempfile
 import cv2
 import numpy as np
 
-from segment_ui_ocr_regions import regions
+try:
+    from .segment_ui_ocr_regions import regions
+except ImportError:
+    # Canonical upstream imports scripts directly from its scripts/ directory.
+    from segment_ui_ocr_regions import regions
 
 
 def _norm(text):
