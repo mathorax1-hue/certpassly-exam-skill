@@ -8,6 +8,8 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -21,7 +23,9 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def audit(pdf_path, held_path, expected_pdf_sha256):
+def audit(pdf_path, held_path, expected_pdf_sha256, ocr=False, max_ocr=500):
+    ocr_regions = 0
+    ocr_agreements = 0
     raw = Path(pdf_path).read_bytes()
     if digest(raw) != expected_pdf_sha256:
         raise ValueError("Original PDF SHA-256 mismatch; refusing to inspect a changed source")
@@ -62,9 +66,29 @@ def audit(pdf_path, held_path, expected_pdf_sha256):
                         if x2 <= x1 or y2 <= y1:
                             continue
                         ok, encoded = cv2.imencode(".png", image[y1:y2, x1:x2])
-                        candidates.append({
+                        candidate = {
                             "kind": region["kind"], "bbox_pixels": region["bbox"],
-                            "crop_sha256": digest(encoded.tobytes()) if ok else None})
+                            "crop_sha256": digest(encoded.tobytes()) if ok else None}
+                        if ocr and ok and ocr_regions < max_ocr:
+                            # OCR is diagnostic only. Persist hashes and word counts,
+                            # never question text or answers in the public report.
+                            with tempfile.TemporaryDirectory() as tmp:
+                                file = Path(tmp) / "private-crop.png"
+                                file.write_bytes(encoded.tobytes())
+                                token_sets = []
+                                for mode in ("3", "6"):
+                                    run = subprocess.run(
+                                        ["tesseract", str(file), "stdout", "--psm", mode],
+                                        check=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, timeout=40)
+                                    token_sets.append(
+                                        re.findall(r"\\w+", run.stdout.decode(
+                                            "utf-8", errors="replace").lower()))
+                            candidate["ocr_pass_agreement"] = token_sets[0] == token_sets[1]
+                            candidate["ocr_word_counts"] = [len(x) for x in token_sets]
+                            ocr_regions += 1
+                            ocr_agreements += int(candidate["ocr_pass_agreement"])
+                        candidates.append(candidate)
                 source_images.append({
                     "question_key": "q%03d" % current, "pdf_page": page_index + 1,
                     "pdf_bbox": [round(float(z), 2) for z in value["bbox"]],
@@ -98,6 +122,8 @@ def audit(pdf_path, held_path, expected_pdf_sha256):
         "held_with_source_images": sum(bool(q["source_images"]) for q in records),
         "held_without_source_images": [q["question_key"] for q in records if not q["source_images"]],
         "roi_counts": dict(kinds),
+        "ocr_regions_tested": ocr_regions,
+        "ocr_regions_with_pass_agreement": ocr_agreements,
         "limits": [
             "Source image assignment uses page text-block reading order; requires source review",
             "ROI detection is geometric only, not an answer or text-fidelity verifier",
@@ -113,12 +139,17 @@ def main():
     ap.add_argument("--held", required=True)
     ap.add_argument("--pdf-sha256", required=True)
     ap.add_argument("--output", required=True)
+    ap.add_argument("--ocr", action="store_true",
+                    help="Run Tesseract PSM 3 and 6 on isolated private regions")
+    ap.add_argument("--max-ocr", type=int, default=500)
     args = ap.parse_args()
-    report = audit(args.pdf, args.held, args.pdf_sha256)
+    report = audit(args.pdf, args.held, args.pdf_sha256,
+                   ocr=args.ocr, max_ocr=args.max_ocr)
     Path(args.output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({k: report[k] for k in
         ("status", "held_count", "held_with_source_images",
-         "held_without_source_images", "roi_counts")}))
+         "held_without_source_images", "roi_counts",
+         "ocr_regions_tested", "ocr_regions_with_pass_agreement")}))
     return 0 if report["held_count"] else 1
 
 
