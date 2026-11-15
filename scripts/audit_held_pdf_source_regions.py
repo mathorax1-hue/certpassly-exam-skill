@@ -41,6 +41,11 @@ def audit(pdf_path, held_path, expected_pdf_sha256, ocr=False, max_ocr=500):
     source_images = []
     all_markers = set()
     for page_index, page in enumerate(doc):
+        # PyMuPDF's unrotated text coordinates advance along x for pages
+        # rotated 90 degrees, and along y for ordinary upright pages.
+        # Sorting y on this owner's 90-degree PDF misassigned q043 images.
+        axis = 0 if page.rotation in (90, 270) else 1
+        reverse_axis = page.rotation == 270
         events = []
         for block in page.get_text("dict")["blocks"]:
             if block["type"] == 0:
@@ -49,10 +54,10 @@ def audit(pdf_path, held_path, expected_pdf_sha256, ocr=False, max_ocr=500):
                     for hit in re.finditer(r"\bQUESTION\s+(\d+)\b", sentence, re.I):
                         number = int(hit.group(1))
                         if 1 <= number <= 89:
-                            events.append((line["bbox"][1], 0, number))
+                            events.append((line["bbox"][axis], 0, number))
             elif block["type"] == 1 and block.get("image"):
-                events.append((block["bbox"][1], 1, block))
-        for _, kind, value in sorted(events, key=lambda x: (x[0], x[1])):
+                events.append((block["bbox"][axis], 1, block))
+        for _, kind, value in sorted(events, key=lambda x: (-x[0] if reverse_axis else x[0], x[1])):
             if kind == 0:
                 current = value
                 all_markers.add(current)
