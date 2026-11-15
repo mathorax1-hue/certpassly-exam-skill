@@ -90,6 +90,11 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
         derived.extend(text_row_subregions(image, parent))
     found = sorted(found + derived,
                    key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
+    if len(found) > max_regions:
+        # Do not discard the already-known parent controls when the image
+        # contains too many supplemental text bands.
+        found = sorted(regions(image),
+                       key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
     if len(found) > max_regions or len(pass_specs) < 2:
         return []
     candidates = []
