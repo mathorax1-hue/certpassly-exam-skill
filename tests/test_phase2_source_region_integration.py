@@ -7,7 +7,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions
+from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions, light_ui_rectangles
 from scripts.patch_phase2_upstream_extractor import (
     IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
     patch as patch_upstream,
@@ -151,6 +151,23 @@ class RegionSourceTests(unittest.TestCase):
         self.assertEqual(sum(x["kind"].endswith("_text_band")
                              for x in found), 3)
         self.assertTrue(all(not x["auto_approved_for_release"] for x in found))
+
+    def test_low_contrast_admin_rows_extracted_from_original_style_screenshot(self):
+        image = np.full((360, 338, 3), 240, np.uint8)
+        for y, label in [(80, "Agent insights"),
+                         (140, "App insights"), (200, "Change history")]:
+            cv2.rectangle(image, (36, y), (298, y+29), (145, 145, 145), 1)
+            cv2.putText(image, label, (50, y+21),
+                        cv2.FONT_HERSHEY_SIMPLEX, .48, (30, 30, 30), 1)
+        found = light_ui_rectangles(image)
+        self.assertGreaterEqual(len(found), 3)
+        self.assertTrue(all(r["kind"] == "light_ui_text_control" for r in found))
+        self.assertTrue(all(r["bbox"][0] >= 36 and
+                            r["bbox"][2] <= 299 for r in found))
+
+    def test_blank_ui_does_not_invent_controls(self):
+        blank = np.full((360, 338, 3), 255, np.uint8)
+        self.assertEqual(light_ui_rectangles(blank), [])
 
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
