@@ -7,7 +7,11 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions, light_ui_rectangles, localized_text_region
+from scripts.phase2_source_region_ocr import (
+    extract, text_row_subregions, deduplicate_source_regions,
+    light_ui_rectangles, localized_text_region, word_cluster_regions,
+    _prepare_region_crop,
+)
 from scripts.patch_phase2_upstream_extractor import (
     IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
     patch as patch_upstream,
@@ -299,6 +303,160 @@ class RegionSourceTests(unittest.TestCase):
             (root / "skill" / name).write_text("# test\n")
         with self.assertRaisesRegex(ValueError, "Pinned canonical upstream mismatch"):
             patch_upstream(root / "pipeline", root / "skill")
+
+    def test_small_source_crops_grow_before_unchanged_passes(self):
+        """A tiny region must be handed to OCR upscaled; gates stay external."""
+        picture = np.full((120, 650, 3), 255, np.uint8)
+        cv2.putText(picture, "Data Catalog", (60, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, .45, (0, 0, 0), 1)
+        self.assertTrue(cv2.imwrite(str(self.file), picture))
+        small = {"kind": "enclosed_text_control_text_band",
+                 "bbox": [55, 25, 160, 48]}
+        large = {"kind": "enclosed_text_control_text_band",
+                 "bbox": [0, 60, 650, 118]}
+        small_native, small_ocr, small_factor = _prepare_region_crop(
+            picture, small["bbox"])
+        large_native, large_ocr, large_factor = _prepare_region_crop(
+            picture, large["bbox"])
+        self.assertEqual(small_factor, 2)
+        self.assertEqual(small_native.shape, (23, 105, 3))
+        self.assertEqual(small_ocr.shape, (46, 210, 3))
+        self.assertEqual(large_factor, 1)
+        self.assertIs(large_ocr, large_native)
+        self.assertEqual(large_ocr.shape, (58, 650, 3))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_ocr_receives_grown_small_region_file(self, bands, parents):
+        """extract() must write the upscaled pixels for a small source band."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [40, 30, 350, 110]}]
+        bands.side_effect = lambda image, parent, **kw: [
+            {"kind": "enclosed_text_control_text_band",
+             "bbox": [45, 40, 340, 58]}]
+        heights = []
+        def ocr(path, cfg, spec):
+            heights.append(cv2.imread(path).shape[0])
+            return {"id": spec["id"], "text": "source words", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
+        self.assertTrue(heights)
+        # The 18 px band never reaches OCR at native size: it is handed over
+        # grown to 36 px (the 80 px panel region stays at native 80 px).
+        self.assertIn(36, heights)
+        self.assertNotIn(18, heights)
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_unboxed_rows_are_localized_when_controls_exist(self, bands, parents):
+        """A standalone row beside a control keeps a tight localized crop."""
+        image = np.full((180, 650, 3), 255, np.uint8)
+        cv2.rectangle(image, (10, 10), (300, 90), (0, 0, 0), 2)
+        cv2.putText(image, "SharePoint", (400, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        self.assertTrue(cv2.imwrite(str(self.file), image))
+        parents.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [10, 10, 300, 90]}]
+        bands.side_effect = lambda image, parent, **kw: (
+            [{"kind": "unboxed_source_text_text_band",
+              "bbox": [0, 45, 650, 85]}]
+            if parent["kind"] == "unboxed_source_text" else [])
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source evidence", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg)
+        kinds = [r["kind"] for r in found]
+        self.assertIn("unboxed_source_text_text_band", kinds)
+        self.assertIn("unboxed_source_text_text_band_localized", kinds)
+        tight = next(r for r in found
+                     if r["kind"] == "unboxed_source_text_text_band_localized")
+        # Ink starts near x=400: localization must trim the empty left side.
+        self.assertGreater(tight["bbox_pixels"][0], 300)
+        self.assertLess(tight["bbox_pixels"][2] - tight["bbox_pixels"][0], 200)
+
+    def test_wide_gap_word_clusters_become_regions(self):
+        """Two ink groups far apart in one band each become their own crop."""
+        image = np.full((140, 650, 3), 255, np.uint8)
+        cv2.putText(image, "SharePoint", (70, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        cv2.putText(image, "Documents", (430, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        clusters = word_cluster_regions(
+            image, {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 90]})
+        self.assertEqual(len(clusters), 2)
+        self.assertTrue(all(c["kind"].endswith("_word_cluster")
+                            for c in clusters))
+        first, second = clusters
+        self.assertLess(first["bbox"][2], 300)
+        self.assertGreater(second["bbox"][0], 350)
+
+    def test_narrow_word_gaps_stay_one_cluster(self):
+        """Normal word spacing must not split a sentence into clusters."""
+        image = np.full((140, 650, 3), 255, np.uint8)
+        cv2.putText(image, "Microsoft Viva Insights", (70, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        self.assertEqual(word_cluster_regions(
+            image, {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 90]}), [])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_light_ui_text_bands_not_starved_by_whole_control_crops(
+            self, bands, light, parents):
+        """Bounded budget: light-UI row bands are read before whole controls."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [5, 5, 400, 40]}]
+        light.return_value = [
+            {"kind": "light_ui_text_control",
+             "bbox": [5, 60 + i * 12, 300, 74 + i * 12]}
+            for i in range(9)]
+        def rows(image, parent, **kw):
+            if parent["kind"] == "light_ui_text_control":
+                return [{"kind": "light_ui_text_control_text_band",
+                         "bbox": [parent["bbox"][0] + 4,
+                                  parent["bbox"][1] + 3,
+                                  parent["bbox"][2] - 4,
+                                  parent["bbox"][3] - 3]}]
+            return []
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "admin row", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg, max_regions=10)
+        kinds = [r["kind"] for r in found]
+        self.assertEqual(len(found), 10)
+        # All 9 light-UI row bands must fit; whole control crops come after.
+        self.assertEqual(kinds.count("light_ui_text_control_text_band"), 9)
+        self.assertTrue(all(not r["auto_approved_for_release"]
+                            for r in found))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_duplicate_light_ui_band_of_original_panel_is_dropped(
+            self, bands, light, parents):
+        """A light-UI band duplicating an original band must not double-read."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [10, 10, 300, 90]}]
+        light.return_value = [{"kind": "light_ui_text_control",
+                               "bbox": [10, 10, 300, 90]}]
+        def rows(image, parent, **kw):
+            return [{"kind": parent["kind"] + "_text_band",
+                     "bbox": [parent["bbox"][0] + 5, parent["bbox"][1] + 8,
+                              parent["bbox"][2] - 5, parent["bbox"][1] + 26]}]
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "same source row", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg)
+        band_kinds = [r["kind"] for r in found if r["kind"].endswith("_text_band")]
+        self.assertEqual(band_kinds,
+                         ["enclosed_text_control_text_band"])
 
 
 if __name__ == "__main__":

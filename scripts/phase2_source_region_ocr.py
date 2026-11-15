@@ -4,6 +4,11 @@ This is Stage 2 SOURCE extraction, not question classification or answer
 inference. Retain full-image OCR and all strict fidelity checks unchanged.
 New OCR text is stored only as a traceable source-region candidate and NEVER
 overwrites source text or silently promotes a held item.
+
+Input-side region preparation only: small crops are grown before the unchanged
+two-pass OCR, and regions are split/localized by pure ink geometry. The pass
+settings, confidence floors and agreement rules always stay exactly as the
+canonical upstream config defines them.
 """
 from __future__ import annotations
 
@@ -82,26 +87,28 @@ def text_row_subregions(image, parent, max_bands=8):
     ]
 
 
+def _area(box):
+    return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+
+def _iou(one, two):
+    dx = max(0, min(one[2], two[2]) - max(one[0], two[0]))
+    dy = max(0, min(one[3], two[3]) - max(one[1], two[1]))
+    intersection = dx * dy
+    union = _area(one) + _area(two) - intersection
+    return intersection / union if union else 0.0
+
+
 def deduplicate_source_regions(found, overlap_threshold=0.82):
     """Drop near-identical nested OCR panels without merging distinct UI boxes."""
-    def area(box):
-        return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
-
-    def iou(one, two):
-        dx = max(0, min(one[2], two[2]) - max(one[0], two[0]))
-        dy = max(0, min(one[3], two[3]) - max(one[1], two[1]))
-        intersection = dx * dy
-        union = area(one) + area(two) - intersection
-        return intersection / union if union else 0.0
-
     kept = []
     # Favor the source crop preserving MORE original text, not an inset copy
     # that clips leading/trailing letters. Compare only the same region kind.
-    for row in sorted(found, key=lambda r: (-area(r["bbox"]),
+    for row in sorted(found, key=lambda r: (-_area(r["bbox"]),
                                             r["bbox"][1], r["bbox"][0],
                                             r["kind"])):
         if any(row["kind"] == prev["kind"] and
-               iou(row["bbox"], prev["bbox"]) >= overlap_threshold
+               _iou(row["bbox"], prev["bbox"]) >= overlap_threshold
                for prev in kept):
             continue
         kept.append(row)
@@ -172,7 +179,82 @@ def localized_text_region(image, source_band):
         "method": "source_ink_extent_without_dropdown_borders",
     }
 
-def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
+
+def word_cluster_regions(image, band, *, min_gap=18, min_width=40,
+                         max_clusters=6):
+    """Split one source text band at wide ink gaps into word-cluster crops.
+
+    Pure geometry: runs of ink columns separated by >= min_gap blank columns
+    are separate source elements (for example a navigation label next to
+    toolbar icons). Cropping each cluster separately lets the unchanged
+    two-pass OCR read clean source words instead of mixed UI chrome. No text,
+    word or meaning is inferred here; every crop still faces both original
+    confidence gates.
+    """
+    x0, y0, x1, y1 = map(int, band["bbox"])
+    h, w = image.shape[:2]
+    if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+        return []
+    gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    if gray.shape[0] < 8 or gray.shape[1] < 120:
+        return []
+    mask = gray < 160
+    vertical_edges = mask.sum(axis=0) >= gray.shape[0] * .75
+    mask[:, vertical_edges] = False
+    active = mask.sum(axis=0) >= 2
+    clusters = []
+    start = None
+    gap = 0
+    for i, on in enumerate(active):
+        if on:
+            if start is None:
+                start = i
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap >= min_gap:
+                clusters.append((start, i - gap))
+                start = None
+    if start is not None:
+        clusters.append((start, len(active) - 1))
+    clusters = [(a, b) for a, b in clusters
+                if b - a + 1 >= min_width]
+    if len(clusters) < 2:
+        return []
+    out = []
+    for a, b in clusters[:max_clusters]:
+        left = max(x0, x0 + a - 3)
+        right = min(x1, x0 + b + 4)
+        if right - left < 30:
+            continue
+        out.append({
+            "kind": band["kind"] + "_word_cluster",
+            "bbox": [left, y0, right, y1],
+            "method": "source_ink_gap_word_cluster",
+        })
+    return out
+
+
+def _prepare_region_crop(image, bbox, small_height=48):
+    """Return (native_crop, ocr_crop, prescale) for one source region.
+
+    The canonical OCR passes scale every input by their configured factor
+    only. Original AB-900 UI crops can be as small as 13 px tall; at that
+    size both unchanged passes misread clear source words. Growing a small
+    crop 2x beforehand gives Tesseract the glyph size it needs while the
+    90/95 word/overall floors and the two-pass agreement stay untouched.
+    Large regions are passed at native size. The native crop is returned
+    separately so its hash still verifies against the source image pixels.
+    """
+    x0, y0, x1, y1 = bbox
+    native = image[y0:y1, x0:x1]
+    if native.shape[0] and native.shape[0] < small_height:
+        return (native, cv2.resize(native, None, fx=2, fy=2,
+                                   interpolation=cv2.INTER_CUBIC), 2)
+    return native, native, 1
+
+
+def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=40):
     """Return source-region candidates with strict two-pass OCR evidence."""
     with open(image_path, "rb") as fh:
         raw = fh.read()
@@ -191,15 +273,14 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     unboxed_bands = text_row_subregions(
         image, {"kind": "unboxed_source_text", "bbox": [0, 0, W, H]},
         max_bands=16)
+    localized_unboxed = []
     if original_panels or novel_panels:
         controls = original_panels + novel_panels
-        def intersects_control(row):
+        def overlaps_control(candidate):
             # A full-width detected text row can overlap a UI box even when
             # its actual ink is outside that box. Use measured source pixels,
             # never the row's assumed full-image width, for the collision
-            # decision. Retain the original crop if localization is uncertain.
-            tight = localized_text_region(image, row)
-            candidate = tight if tight is not None else row
+            # decision.
             rx0, ry0, rx1, ry1 = candidate["bbox"]
             row_area = max(1, (rx1-rx0)*(ry1-ry0))
             for control in controls:
@@ -210,8 +291,18 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
                 if overlap / min(row_area, control_area) >= .4:
                     return True
             return False
-        unboxed_bands = [row for row in unboxed_bands
-                         if not intersects_control(row)]
+        kept_unboxed = []
+        for row in unboxed_bands:
+            # Keep the tight crop the collision decision already measured:
+            # without it the surviving full-width row still carries UI chrome
+            # that defeats the unchanged strict OCR passes.
+            tight = localized_text_region(image, row)
+            candidate = tight if tight is not None else row
+            if not overlaps_control(candidate):
+                kept_unboxed.append(row)
+                if tight is not None:
+                    localized_unboxed.append(tight)
+        unboxed_bands = kept_unboxed
     else:
         original_panels = unboxed_bands
         unboxed_bands = []
@@ -225,6 +316,12 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     for panel in novel_panels:
         other_bands.extend(text_row_subregions(image, panel))
     original_bands = deduplicate_source_regions(original_bands)
+    # A detected low-contrast control often duplicates an original panel's
+    # crop. Drop near-identical light-UI bands so the bounded crop budget is
+    # not spent reading the same source pixels twice.
+    other_bands = [band for band in other_bands
+                   if not any(_iou(band["bbox"], prev["bbox"]) >= 0.82
+                              for prev in original_bands)]
     other_bands = deduplicate_source_regions(other_bands)
     localizations = []
     for band in original_panels + original_bands + other_bands:
@@ -232,10 +329,17 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
             tight = localized_text_region(image, band)
             if tight:
                 localizations.append(tight)
+    localizations.extend(localized_unboxed)
     localizations = deduplicate_source_regions(localizations)
+    # A localized or full-width band can still mix several source elements
+    # separated by wide blank gaps; each cluster is its own strict candidate.
+    cluster_bands = []
+    for band in localizations + other_bands + unboxed_bands:
+        cluster_bands.extend(word_cluster_regions(image, band))
+    cluster_bands = deduplicate_source_regions(cluster_bands)
     prioritized = (
-        original_panels + original_bands +
-        novel_panels + other_bands + localizations + unboxed_bands)
+        original_panels + original_bands + other_bands +
+        novel_panels + localizations + cluster_bands + unboxed_bands)
     found = prioritized[:max_regions]
     found = sorted(found, key=lambda d: (d["bbox"][1],
                                          d["bbox"][0], d["kind"]))
@@ -246,9 +350,11 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
         x0, y0, x1, y1 = map(int, item["bbox"])
         if x0 < 0 or y0 < 0 or x1 > W or y1 > H or x0 >= x1 or y0 >= y1:
             continue
-        crop = image[y0:y1, x0:x1]
-        ok, encoded = cv2.imencode(".png", crop)
-        if not ok:
+        native, ocr_crop, prescale = _prepare_region_crop(
+            image, (x0, y0, x1, y1))
+        ok, encoded = cv2.imencode(".png", ocr_crop)
+        ok_native, encoded_native = cv2.imencode(".png", native)
+        if not ok or not ok_native:
             continue
         with tempfile.TemporaryDirectory(prefix="certpassly-phase2-") as t:
             path = os.path.join(t, "source-crop.png")
@@ -270,10 +376,14 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
         candidates.append({
             "source_file": filename,
             "source_image_sha256": hashlib.sha256(raw).hexdigest(),
-            "crop_sha256": hashlib.sha256(encoded.tobytes()).hexdigest(),
+            # Native source-crop hash: crop the bbox out of the hashed source
+            # image and this digest verifies it. ocr_prescale separately
+            # records how the OCR input was grown from these exact pixels.
+            "crop_sha256": hashlib.sha256(encoded_native.tobytes()).hexdigest(),
             "kind": item["kind"],
             "bbox_pixels": [x0, y0, x1, y1],
             "source_dimensions": [W, H],
+            "ocr_prescale": prescale,
             "ocr_text_candidate": passes[0].get("text") or "",
             "two_pass_agreement": agreed,
             "confidence_pass": confidence_pass,

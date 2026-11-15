@@ -11,6 +11,7 @@
 - The independent release ledger identified **89 unverified answer accuracy flags**, **55 flagged human-review questions**, **42 active unverified answer-reference screenshots**, and **89 unapproved active media assets**. Counts refer to that last recorded gate and can change after evidence review.
 - The package privacy audit checked 84 reviewer-only images and reported no reviewer-only media paths referenced by learner-facing schemas in the tested candidate. It did not test a live web importer.
 - For 13 source slots, independently authored CertPassly Team replacement drafts were created. They are not proof that every replacement answer and distractor has been verified.
+- Phase 2 source-region OCR: four held questions each had candidate regions but zero strict two-pass regions on the original PDF. All root causes were input-side: sub-30-pixel crops degraded the second OCR pass below the unchanged 90/95 floors while the first pass read the same words clearly; unboxed text rows were never localized once any UI control existed; a 24-region budget truncated later panels' text bands; and full-width bands mixed toolbar icons with clean labels. Generic region preparation (growing small crops, retaining the already-computed localization, reordering the bounded budget, and splitting bands at wide ink gaps) produced strict regions for all four questions with both passes, thresholds and agreement rules unchanged. Strict regions remain source evidence only, never release approval.
 
 ## Failure patterns -> permanent requirements
 
@@ -26,6 +27,10 @@
 | AI checks an official page but does not verify every option | Store vendor URL, page hash, quote, option-by-option rationale and uncertainty | Question evidence |
 | AI says package is approved before independent reviewer approval | Protected private release environment with explicit approval | Release gate |
 | Upstream dependencies drift without review | Full-commit pin and incompatibility test before upgrades | Supply chain |
+| Tiny UI crops fail the second OCR pass while the first reads clearly | Grow small region crops before the unchanged pass scaling; hash the native crop and record the input transform separately | Source OCR |
+| Unboxed text rows keep UI chrome once any control exists | Keep the localization already computed for collision checks as its own region candidate | Source OCR |
+| Bounded crop budget starves later panels' text bands | Read all control text bands before whole control crops; drop low-contrast bands duplicating original panels | Source OCR |
+| Full-width bands mix toolbar icons and clean labels in one crop | Split bands at wide ink gaps into word-cluster candidates; each still faces both gates | Source OCR |
 
 ## Links (no private source content)
 
