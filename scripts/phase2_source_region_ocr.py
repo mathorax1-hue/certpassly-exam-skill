@@ -254,13 +254,15 @@ def _prepare_region_crop(image, bbox, small_height=48):
     return native, native, 1
 
 
-def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=40):
-    """Return source-region candidates with strict two-pass OCR evidence."""
-    with open(image_path, "rb") as fh:
-        raw = fh.read()
-    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        return []
+def source_regions(image, *, max_regions=40):
+    """Return the canonical prioritized source regions for one source image.
+
+    Pure ink geometry: detected controls, their text bands, localizations,
+    word clusters and surviving unboxed rows, in the converter's exact
+    source-first priority order and bounded by the same crop budget. This is
+    the single region definition shared by the integrated converter and any
+    verification tooling; it never infers text, words or meaning.
+    """
     H, W = image.shape[:2]
     if H == 0 or W == 0:
         return []
@@ -341,8 +343,21 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=40):
         original_panels + original_bands + other_bands +
         novel_panels + localizations + cluster_bands + unboxed_bands)
     found = prioritized[:max_regions]
-    found = sorted(found, key=lambda d: (d["bbox"][1],
-                                         d["bbox"][0], d["kind"]))
+    return sorted(found, key=lambda d: (d["bbox"][1],
+                                        d["bbox"][0], d["kind"]))
+
+
+def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=40):
+    """Return source-region candidates with strict two-pass OCR evidence."""
+    with open(image_path, "rb") as fh:
+        raw = fh.read()
+    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return []
+    H, W = image.shape[:2]
+    if H == 0 or W == 0:
+        return []
+    found = source_regions(image, max_regions=max_regions)
     if not found or len(pass_specs) < 2:
         return []
     candidates = []

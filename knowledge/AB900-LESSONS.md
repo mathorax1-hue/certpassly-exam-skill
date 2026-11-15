@@ -12,6 +12,7 @@
 - The package privacy audit checked 84 reviewer-only images and reported no reviewer-only media paths referenced by learner-facing schemas in the tested candidate. It did not test a live web importer.
 - For 13 source slots, independently authored CertPassly Team replacement drafts were created. They are not proof that every replacement answer and distractor has been verified.
 - Phase 2 source-region OCR: four held questions each had candidate regions but zero strict two-pass regions on the original PDF. All root causes were input-side: sub-30-pixel crops degraded the second OCR pass below the unchanged 90/95 floors while the first pass read the same words clearly; unboxed text rows were never localized once any UI control existed; a 24-region budget truncated later panels' text bands; and full-width bands mixed toolbar icons with clean labels. Generic region preparation (growing small crops, retaining the already-computed localization, reordering the bounded budget, and splitting bands at wide ink gaps) produced strict regions for all four questions with both passes, thresholds and agreement rules unchanged. Strict regions remain source evidence only, never release approval.
+- Phase 2 source-coverage verification: a per-question verifier built over the converter's own records plus OCR-line crop batteries established, for all 89 questions, that every reference word is either verified (text layer, canonical strict region, or a strict two-pass reading of the word's OCR line box at a documented input preparation) or carries a recorded, exhausted attempt battery. Full-image OCR line boxes fail both unchanged passes whenever a dropdown border, dense navigation icon, or sparse arrow glyph sits inside the box; border trimming and narrow-glyph skipping recover those lines without touching any gate. Remaining uncovered words are genuinely marginal at the unchanged quality bar (degraded tiny text where the two passes produce different misreads); they stay documented deficiencies, never verified coverage, and never release approval.
 
 ## Failure patterns -> permanent requirements
 
@@ -31,6 +32,8 @@
 | Unboxed text rows keep UI chrome once any control exists | Keep the localization already computed for collision checks as its own region candidate | Source OCR |
 | Bounded crop budget starves later panels' text bands | Read all control text bands before whole control crops; drop low-contrast bands duplicating original panels | Source OCR |
 | Full-width bands mix toolbar icons and clean labels in one crop | Split bands at wide ink gaps into word-cluster candidates; each still faces both gates | Source OCR |
+| OCR line boxes include dropdown borders and UI icons, so both unchanged passes fail clear text | Trim near-full-height border columns and skip narrow leading glyphs before re-reading; record every attempt | Source coverage |
+| Coverage summary quietly mixes verified words with candidate-only OCR | Classify every reference word as verified (named class) or evidenced deficiency with its attempt battery; candidates never count | Source coverage |
 
 ## Links (no private source content)
 
