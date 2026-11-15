@@ -30,6 +30,8 @@ def traverse(value, prefix="$"):
     elif isinstance(value, list):
         for i, item in enumerate(value):
             yield from traverse(item, prefix + "[" + str(i) + "]")
+    else:
+        yield prefix, value
 
 def verify(exam_path, schema_path, registry_path, evidence_path):
     # Fail closed when schema engine is unavailable.
