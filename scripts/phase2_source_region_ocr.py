@@ -401,6 +401,10 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=40):
             "ocr_prescale": prescale,
             "ocr_text_candidate": passes[0].get("text") or "",
             "two_pass_agreement": agreed,
+            # Verified word-level evidence for agreed regions: the primary
+            # pass read these words at these confidences and the second
+            # pass agreed on the text. Empty for non-agreed regions.
+            "verified_words": list(passes[0].get("words") or []) if agreed else [],
             "confidence_pass": confidence_pass,
             "passes": [
                 {"id": str(p.get("id")), "min_confidence": p.get("min_confidence"),
