@@ -97,6 +97,25 @@ class RegionSourceTests(unittest.TestCase):
             "kind": "matrix_statement_column", "bbox": [5, 5, 430, 185]
         }), [])
 
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_unboxed_source_words_are_not_silently_lost(self, detected):
+        detected.return_value = []
+        picture = np.full((240, 600, 3), 255, np.uint8)
+        for y, words in ((75, "First statement"), (120, "Second statement"),
+                         (165, "Third statement")):
+            cv2.putText(picture, words, (35, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 0, 0), 2)
+        self.assertTrue(cv2.imwrite(str(self.file), picture))
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source evidence only",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        results = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
+        self.assertGreaterEqual(len(results), 2)
+        self.assertTrue(all(x["kind"]=="unboxed_source_text_text_band"
+                            for x in results))
+        self.assertTrue(all(not x["auto_approved_for_release"] for x in results))
+
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
         (root / "pipeline/scripts").mkdir(parents=True)
