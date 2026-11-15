@@ -66,7 +66,9 @@ def audit(pdf_path, held_report, expected_source_sha):
         pair = mapped.get(key, [])
         if len(pair) != 2:
             results.append({"question_key": key, "status": "HELD_NOT_EXACTLY_TWO_IMAGES",
-                            "source_image_count": len(pair)})
+                            "source_image_count": len(pair),
+                            "release_approved": False,
+                            "owner_key_candidate_only": True})
             continue
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
