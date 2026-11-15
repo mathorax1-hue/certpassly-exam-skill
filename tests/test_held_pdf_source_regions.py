@@ -74,6 +74,35 @@ class HeldSourceAuditTests(unittest.TestCase):
         self.assertTrue(record["ocr_empty_output"])
         self.assertFalse(record["ocr_pass_agreement"])
 
+    def test_rotated_90_degree_pdf_maps_images_by_horizontal_reading_axis(self):
+        # Build an owner-style page rotated 90 degrees: two questions with
+        # separate embedded images, both after their respective text markers.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf = root / "rotated.pdf"
+            held = root / "held.json"
+            img = np.full((290, 985, 3), 255, dtype=np.uint8)
+            cv2.rectangle(img, (516, 98), (974, 245), (0, 0, 0), 2)
+            _, png = cv2.imencode(".png", img)
+            d = fitz.open()
+            pg = d.new_page(width=612, height=792)
+            pg.insert_text((40, 90), "QUESTION 43", rotate=90)
+            pg.insert_image(fitz.Rect(105, 105, 250, 310), stream=png.tobytes())
+            pg.insert_text((40, 430), "QUESTION 44", rotate=90)
+            pg.insert_image(fitz.Rect(105, 455, 250, 655), stream=png.tobytes())
+            pg.set_rotation(90)
+            d.save(str(pdf))
+            held.write_text(json.dumps([
+                {"question_key": "q043"},
+                {"question_key": "q044"},
+            ]))
+            result = audit(pdf, held, hashlib.sha256(pdf.read_bytes()).hexdigest())
+            bykey = {q["question_key"]: q for q in result["questions"]}
+            self.assertEqual(result["held_count"], 2)
+            self.assertEqual(result["held_with_source_images"], 2)
+            self.assertEqual(bykey["q043"]["source_image_count"], 1)
+            self.assertEqual(bykey["q044"]["source_image_count"], 1)
+
     def test_source_hash_tampering_refused(self):
         with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
             audit(self.pdf, self.held, "0" * 64)
