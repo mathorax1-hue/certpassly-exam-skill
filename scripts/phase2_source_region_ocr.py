@@ -37,10 +37,17 @@ def text_row_subregions(image, parent, max_bands=8):
     h, w = image.shape[:2]
     if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
         return []
-    pad = 7
+    # The detector's enclosed-control bbox is already inset from its rule.
+    # Cropping an additional 7 horizontal pixels deleted leading characters
+    # (e.g. "install" -> "nstall") in the original AB-900 screenshots.
+    # Keep a small inner margin for row analysis, but restore the full text
+    # width when emitting the actual OCR crop.
+    pad_y = 7
+    pad_x = 2
     if x1 - x0 < 100 or y1 - y0 < 50:
         return []
-    gray = cv2.cvtColor(image[y0 + pad:y1 - pad, x0 + pad:x1 - pad],
+    gray = cv2.cvtColor(image[y0 + pad_y:y1 - pad_y,
+                              x0 + pad_x:x1 - pad_x],
                         cv2.COLOR_BGR2GRAY)
     if gray.size == 0:
         return []
@@ -67,8 +74,10 @@ def text_row_subregions(image, parent, max_bands=8):
         return []
     return [
         {"kind": parent["kind"] + "_text_band",
-         "bbox": [x0 + pad, y0 + pad + max(0, a - 4),
-                  x1 - pad, y0 + pad + min(gray.shape[0], b + 5)]}
+         # Give OCR its original first/last character and ~3 px top/bottom
+         # breathing room; keep the crop inside the source image bounds.
+         "bbox": [x0, y0 + pad_y + max(0, a - 7),
+                  x1, y0 + pad_y + min(gray.shape[0], b + 8)]}
         for a, b in bands
     ]
 
