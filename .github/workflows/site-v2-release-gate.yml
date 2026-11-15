@@ -42,5 +42,7 @@ jobs:
         run: python -m pip install 'pymupdf>=1.24,<2'
       - name: Verify synthetic source PDF question-to-image mapping and hash checks
         run: python -m unittest discover -s tests -p 'test_held_pdf_source_regions.py' -v
+      - name: Verify fail-closed selected dropdown answer candidate detection
+        run: python -m unittest discover -s tests -p 'test_owner_marked_dropdown.py' -v
       - name: Verify our gate against the cloned upstream valid V2 examples
         run: python -m scripts.test_pinned_site_v2_contract upstream
