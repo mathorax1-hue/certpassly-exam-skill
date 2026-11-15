@@ -88,8 +88,8 @@ class HeldSourceAuditTests(unittest.TestCase):
             pg = d.new_page(width=612, height=792)
             pg.insert_text((40, 90), "QUESTION 43", rotate=90)
             pg.insert_image(fitz.Rect(105, 105, 250, 310), stream=png.tobytes())
-            pg.insert_text((40, 430), "QUESTION 44", rotate=90)
-            pg.insert_image(fitz.Rect(105, 455, 250, 655), stream=png.tobytes())
+            pg.insert_text((385, 430), "QUESTION 44", rotate=90)
+            pg.insert_image(fitz.Rect(455, 455, 600, 655), stream=png.tobytes())
             pg.set_rotation(90)
             d.save(str(pdf))
             held.write_text(json.dumps([
