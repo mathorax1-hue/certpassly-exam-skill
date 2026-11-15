@@ -36,5 +36,7 @@ jobs:
         run: python upstream/scripts/validate_question_v2.py --examples upstream/reference/site-format/v2/examples
       - name: Run our independent synthetic regression tests
         run: python -m unittest discover -s tests -p 'test_site_v2_release_gate.py' -v
+      - name: Verify OCR UI region extraction on synthetic original-style images
+        run: python -m unittest discover -s tests -p 'test_segment_ui_ocr_regions.py' -v
       - name: Verify our gate against the cloned upstream valid V2 examples
         run: python -m scripts.test_pinned_site_v2_contract upstream
