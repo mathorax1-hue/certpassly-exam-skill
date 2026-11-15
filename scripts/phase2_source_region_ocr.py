@@ -194,7 +194,13 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     if original_panels or novel_panels:
         controls = original_panels + novel_panels
         def intersects_control(row):
-            rx0, ry0, rx1, ry1 = row["bbox"]
+            # A full-width detected text row can overlap a UI box even when
+            # its actual ink is outside that box. Use measured source pixels,
+            # never the row's assumed full-image width, for the collision
+            # decision. Retain the original crop if localization is uncertain.
+            tight = localized_text_region(image, row)
+            candidate = tight if tight is not None else row
+            rx0, ry0, rx1, ry1 = candidate["bbox"]
             row_area = max(1, (rx1-rx0)*(ry1-ry0))
             for control in controls:
                 x0, y0, x1, y1 = control["bbox"]
