@@ -182,43 +182,37 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     H, W = image.shape[:2]
     if H == 0 or W == 0:
         return []
-    found = deduplicate_source_regions(regions(image) + light_ui_rectangles(image))
-    if not found:
-        # Some screenshots have source text without a bordered control.
-        # Extract actual ink-line bands as source candidates only.
-        found = text_row_subregions(
+    original_panels = deduplicate_source_regions(regions(image))
+    novel_panels = deduplicate_source_regions(light_ui_rectangles(image))
+    if not original_panels and not novel_panels:
+        # Text without enclosing UI still requires source-ink segmentation.
+        original_panels = text_row_subregions(
             image, {"kind": "unboxed_source_text", "bbox": [0, 0, W, H]},
             max_bands=16)
-    # Keep canonical full-image OCR as before. Extra text-band candidates
-    # supplement source extraction without replacing existing evidence.
-    derived = []
-    for parent in found:
-        if parent["kind"].endswith("_text_band"):
-            continue
-        derived.extend(text_row_subregions(image, parent))
-    # Reserve room for each distinct original panel, then use remaining
-    # OCR budget for individual text bands. The previous all-or-nothing cap
-    # discarded every text band on busy SharePoint screenshots (q007).
-    parents = sorted(found, key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
-    child_bands = deduplicate_source_regions(derived)
-    # In unboxed dropdown screenshots the original band may be full width
-    # even though the option text occupies a small part of that width.
-    localized = []
-    for region in parents + child_bands:
-        if region["kind"].endswith("_text_band"):
-            tight = localized_text_region(image, region)
+    # Source-first priority is mandatory. Otherwise low-contrast newly found
+    # UI rectangles can evict formerly verified source OCR for q056/q082.
+    original_bands = []
+    for panel in original_panels:
+        if not panel["kind"].endswith("_text_band"):
+            original_bands.extend(text_row_subregions(image, panel))
+    other_bands = []
+    for panel in novel_panels:
+        other_bands.extend(text_row_subregions(image, panel))
+    original_bands = deduplicate_source_regions(original_bands)
+    other_bands = deduplicate_source_regions(other_bands)
+    localizations = []
+    for band in original_panels + original_bands + other_bands:
+        if band["kind"].endswith("_text_band"):
+            tight = localized_text_region(image, band)
             if tight:
-                localized.append(tight)
-    localized = deduplicate_source_regions(localized)
-    # Preserve all distinct original source panels first.
-    if len(parents) >= max_regions:
-        found = parents[:max_regions]
-    else:
-        count = max_regions - len(parents)
-        selected = child_bands[:count]
-        remaining = count - len(selected)
-        found = sorted(parents + selected + localized[:remaining],
-                       key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
+                localizations.append(tight)
+    localizations = deduplicate_source_regions(localizations)
+    prioritized = (
+        original_panels + original_bands +
+        novel_panels + other_bands + localizations)
+    found = prioritized[:max_regions]
+    found = sorted(found, key=lambda d: (d["bbox"][1],
+                                         d["bbox"][0], d["kind"]))
     if not found or len(pass_specs) < 2:
         return []
     candidates = []
