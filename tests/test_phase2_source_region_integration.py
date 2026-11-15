@@ -7,7 +7,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions, light_ui_rectangles
+from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions, light_ui_rectangles, localized_text_region
 from scripts.patch_phase2_upstream_extractor import (
     IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
     patch as patch_upstream,
@@ -168,6 +168,26 @@ class RegionSourceTests(unittest.TestCase):
     def test_blank_ui_does_not_invent_controls(self):
         blank = np.full((360, 338, 3), 255, np.uint8)
         self.assertEqual(light_ui_rectangles(blank), [])
+
+    def test_dropdown_text_localization_excludes_original_vertical_rules(self):
+        image = np.full((140, 650, 3), 255, dtype=np.uint8)
+        cv2.rectangle(image, (155, 20), (450, 120), (0, 0, 0), 2)
+        cv2.putText(image, "Data Catalog", (170, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, .60, (0, 0, 0), 2)
+        original = {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 83]}
+        result = localized_text_region(image, original)
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(result["bbox"][0], 164)
+        self.assertLess(result["bbox"][2], 450)
+        self.assertGreater(result["bbox"][2]-result["bbox"][0], 40)
+
+    def test_blank_ink_band_is_not_source_text(self):
+        image = np.full((140, 650, 3), 255, np.uint8)
+        self.assertIsNone(localized_text_region(image, {
+            "kind": "unboxed_source_text_text_band",
+            "bbox": [0, 50, 650, 83]
+        }))
 
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
