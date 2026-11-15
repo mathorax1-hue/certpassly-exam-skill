@@ -82,10 +82,10 @@ def audit(pdf_path, held_path, expected_pdf_sha256, ocr=False, max_ocr=500):
                                         check=True, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, timeout=40)
                                     token_sets.append(
-                                        re.findall(r"\\w+", run.stdout.decode(
+                                        re.findall(r"[A-Za-z0-9_]+", run.stdout.decode(
                                             "utf-8", errors="replace").lower()))
-                            candidate["ocr_pass_agreement"] = token_sets[0] == token_sets[1]
-                            candidate["ocr_word_counts"] = [len(x) for x in token_sets]
+                            candidate["ocr_pass_agreement"] = bool(token_sets[0]) and token_sets[0] == token_sets[1]
+                            candidate["ocr_word_counts"] = [len(x) for x in token_sets]\n                            candidate["ocr_empty_output"] = not token_sets[0] or not token_sets[1]
                             ocr_regions += 1
                             ocr_agreements += int(candidate["ocr_pass_agreement"])
                         candidates.append(candidate)
