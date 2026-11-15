@@ -134,7 +134,7 @@ class RegionSourceTests(unittest.TestCase):
     def test_busy_panel_budget_preserves_child_text_regions(self, bands, parents):
         parents.return_value = [
             {"kind": "enclosed_text_control", "bbox": [5, 5, 450, 100]},
-            {"kind": "enclosed_text_control", "bbox": [5, 110, 450, 190]},
+            {"kind": "enclosed_text_control", "bbox": [5, 100, 450, 170]},
         ]
         bands.side_effect = lambda image, parent, **kw: [
             {"kind": "enclosed_text_control_text_band",
