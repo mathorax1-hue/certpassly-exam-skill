@@ -184,11 +184,30 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
         return []
     original_panels = deduplicate_source_regions(regions(image))
     novel_panels = deduplicate_source_regions(light_ui_rectangles(image))
-    if not original_panels and not novel_panels:
-        # Text without enclosing UI still requires source-ink segmentation.
-        original_panels = text_row_subregions(
-            image, {"kind": "unboxed_source_text", "bbox": [0, 0, W, H]},
-            max_bands=16)
+    # Mixed screenshots may contain both boxed controls and unboxed text.
+    # Historically the unboxed detector ran only when there were NO controls,
+    # silently omitting any standalone source lines in mixed layouts. Keep
+    # original panels first and add only non-overlapping unboxed row evidence.
+    unboxed_bands = text_row_subregions(
+        image, {"kind": "unboxed_source_text", "bbox": [0, 0, W, H]},
+        max_bands=16)
+    if original_panels or novel_panels:
+        controls = original_panels + novel_panels
+        def intersects_control(row):
+            rx0, ry0, rx1, ry1 = row["bbox"]
+            row_area = max(1, (rx1-rx0)*(ry1-ry0))
+            for control in controls:
+                x0, y0, x1, y1 = control["bbox"]
+                overlap = max(0, min(rx1, x1)-max(rx0, x0)) * max(
+                    0, min(ry1, y1)-max(ry0, y0))
+                if overlap / row_area >= .5:
+                    return True
+            return False
+        unboxed_bands = [row for row in unboxed_bands
+                         if not intersects_control(row)]
+    else:
+        original_panels = unboxed_bands
+        unboxed_bands = []
     # Source-first priority is mandatory. Otherwise low-contrast newly found
     # UI rectangles can evict formerly verified source OCR for q056/q082.
     original_bands = []
@@ -209,7 +228,7 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     localizations = deduplicate_source_regions(localizations)
     prioritized = (
         original_panels + original_bands +
-        novel_panels + other_bands + localizations)
+        novel_panels + other_bands + localizations + unboxed_bands)
     found = prioritized[:max_regions]
     found = sorted(found, key=lambda d: (d["bbox"][1],
                                          d["bbox"][0], d["kind"]))
