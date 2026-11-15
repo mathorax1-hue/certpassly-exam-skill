@@ -83,10 +83,18 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     if H == 0 or W == 0:
         return []
     found = regions(image)
+    if not found:
+        # Some screenshots have source text without a bordered control.
+        # Extract actual ink-line bands as source candidates only.
+        found = text_row_subregions(
+            image, {"kind": "unboxed_source_text", "bbox": [0, 0, W, H]},
+            max_bands=16)
     # Keep canonical full-image OCR as before. Extra text-band candidates
     # supplement source extraction without replacing existing evidence.
     derived = []
     for parent in found:
+        if parent["kind"].endswith("_text_band"):
+            continue
         derived.extend(text_row_subregions(image, parent))
     found = sorted(found + derived,
                    key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
