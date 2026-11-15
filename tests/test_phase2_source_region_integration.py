@@ -189,6 +189,28 @@ class RegionSourceTests(unittest.TestCase):
             "bbox": [0, 50, 650, 83]
         }))
 
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_original_source_regions_cannot_be_evicted_by_new_ui_boxes(
+            self, bands, light, original):
+        original.return_value = [{"kind": "matrix_statement_column",
+                                  "bbox": [0, 0, 400, 130]}]
+        light.return_value = [
+            {"kind": "light_ui_text_control",
+             "bbox": [5+i*3, 5+i*3, 350, 65+i*3]}
+            for i in range(18)]
+        bands.return_value = []
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "retained source statement",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        result = extract(str(self.file), self.file.name, ocr, self.specs,
+                         self.cfg, max_regions=5)
+        self.assertEqual(len(result), 5)
+        self.assertEqual(result[0]["kind"], "matrix_statement_column")
+        self.assertTrue(result[0]["usable_as_verified_source"])
+
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
         (root / "pipeline/scripts").mkdir(parents=True)
