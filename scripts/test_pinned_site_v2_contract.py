@@ -69,7 +69,7 @@ def main(argv):
     sys.path.insert(0, str((upstream / "scripts").resolve()))
     import package_guard as pg
     policy={"brand_denylist":[],"policy":{"contact_patterns":{
-        "email":r"[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}"}}}
+        "email":r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}"}}}
     policy_config={"package_exclude":[
         "questions.json","extracted/**","export/**","media/src/*"]}
     with tempfile.TemporaryDirectory() as tmp:
