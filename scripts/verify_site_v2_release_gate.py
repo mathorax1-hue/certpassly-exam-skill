@@ -12,7 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-HTML = re.compile(r"<\\s*(?:[a-zA-Z!/]|\\?)|javascript\\s*:|data\\s*:\\s*text/html", re.I)
+HTML = re.compile(r"<\s*(?:[a-zA-Z!/]|\?)|javascript\s*:|data\s*:\s*text/html", re.I)
 LEAK = {"answer_key", "correct_option_ids", "correct_answer", "is_correct",
         "server_only_answer_key", "option_rationales", "partial_credit"}
 VALID_STATUS = {"owner_key", "researched_official", "researched_unverified", "answer_not_found"}
@@ -136,7 +136,7 @@ def main():
         result = {"status":"BLOCKED","release_eligible":False,
                   "issues":[{"code":"gate_execution_failed","error_type":type(e).__name__}]}
     out=Path(args.report);out.parent.mkdir(parents=True,exist_ok=True)
-    out.write_text(json.dumps(result,sort_keys=True,indent=2)+"\\n",encoding="utf-8")
+    out.write_text(json.dumps(result,sort_keys=True,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"status":result["status"],"report":str(out),
                       "issue_count":len(result["issues"])}))
     return 0 if result["release_eligible"] else 1
