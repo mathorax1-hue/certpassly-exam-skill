@@ -88,6 +88,9 @@ class RegionSourceTests(unittest.TestCase):
             image, {"kind": "enclosed_text_control",
                     "bbox": [15, 35, 490, 200]})
         self.assertEqual(len(bands), 3)
+        # Source text band must not crop off leading characters again.
+        self.assertEqual(bands[0]["bbox"][0], 15)
+        self.assertEqual(bands[0]["bbox"][2], 490)
         self.assertTrue(all(x["kind"]=="enclosed_text_control_text_band" for x in bands))
         self.assertTrue(all(0<=x["bbox"][1]<x["bbox"][3]<=250 for x in bands))
 
