@@ -198,8 +198,8 @@ class RegionSourceTests(unittest.TestCase):
                                   "bbox": [0, 0, 400, 130]}]
         light.return_value = [
             {"kind": "light_ui_text_control",
-             "bbox": [5+i*3, 5+i*3, 350, 65+i*3]}
-            for i in range(18)]
+             "bbox": [450, 1+i*18, 600, 17+i*18]}
+            for i in range(9)]
         bands.return_value = []
         def ocr(path, cfg, spec):
             return {"id": spec["id"], "text": "retained source statement",
