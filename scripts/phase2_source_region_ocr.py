@@ -26,6 +26,52 @@ def _norm(text):
     return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
 
 
+
+def text_row_subregions(image, parent, max_bands=8):
+    """Isolate individual source text bands inside a detected control.
+
+    Detect actual ink rows geometrically; never infer a question type, word or
+    selected answer. Only supplemental OCR candidates are produced.
+    """
+    x0, y0, x1, y1 = map(int, parent["bbox"])
+    h, w = image.shape[:2]
+    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
+        return []
+    pad = 7
+    if x1 - x0 < 100 or y1 - y0 < 50:
+        return []
+    gray = cv2.cvtColor(image[y0 + pad:y1 - pad, x0 + pad:x1 - pad],
+                        cv2.COLOR_BGR2GRAY)
+    if gray.size == 0:
+        return []
+    # Remove major enclosing edges by insetting. Counting ink in the
+    # horizontal direction preserves multiword statements and dropdown options.
+    ink = (gray < 170).sum(axis=1)
+    needed = max(4, int(gray.shape[1] * .012))
+    active = np.flatnonzero(ink >= needed)
+    if len(active) < 10:
+        return []
+    bands = []
+    start = last = int(active[0])
+    for current in active[1:]:
+        current = int(current)
+        if current - last <= 5:
+            last = current
+        else:
+            if last - start >= 6:
+                bands.append((start, last))
+            start = last = current
+    if last - start >= 6:
+        bands.append((start, last))
+    if not 2 <= len(bands) <= max_bands:
+        return []
+    return [
+        {"kind": parent["kind"] + "_text_band",
+         "bbox": [x0 + pad, y0 + pad + max(0, a - 4),
+                  x1 - pad, y0 + pad + min(gray.shape[0], b + 5)]}
+        for a, b in bands
+    ]
+
 def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     """Return source-region candidates with strict two-pass OCR evidence."""
     with open(image_path, "rb") as fh:
@@ -37,7 +83,13 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     if H == 0 or W == 0:
         return []
     found = regions(image)
-    found = sorted(found, key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
+    # Keep canonical full-image OCR as before. Extra text-band candidates
+    # supplement source extraction without replacing existing evidence.
+    derived = []
+    for parent in found:
+        derived.extend(text_row_subregions(image, parent))
+    found = sorted(found + derived,
+                   key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
     if len(found) > max_regions or len(pass_specs) < 2:
         return []
     candidates = []
