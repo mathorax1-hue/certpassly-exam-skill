@@ -1,0 +1,48 @@
+name: Pinned upstream CertPassly V2 compatibility and independent gate
+on:
+  push:
+    branches:
+      - chatgpt/strict-v2-evidence-gates-20261115
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Pinned upstream + independent tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout our verification skill
+        uses: actions/checkout@v4
+      - name: Clone canonical upstream at immutable reviewed commit
+        uses: actions/checkout@v4
+        with:
+          repository: msaqlainhaneef1/certpassly-exam-pipeline
+          ref: d9b6bf67efb870019dd88caeffa90952b7e000d3
+          path: upstream
+          persist-credentials: false
+      - name: Record immutable upstream identity
+        shell: bash
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "d9b6bf67efb870019dd88caeffa90952b7e000d3"
+          sha256sum upstream/reference/site-format/v2/question.schema.json
+          test "$(sha256sum upstream/reference/site-format/v2/question.schema.json | cut -d' ' -f1)" = "da9331c562a0e08cd156cc5efe6181cb8910ec19c523ff83dc43687190dc728e"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install upstream package and schema dependencies
+        run: python -m pip install -e ./upstream 'jsonschema>=4.18,<5'
+      - name: Run upstream canonical site V2 validators
+        run: python upstream/scripts/validate_question_v2.py --examples upstream/reference/site-format/v2/examples
+      - name: Run our independent synthetic regression tests
+        run: python -m unittest discover -s tests -p 'test_site_v2_release_gate.py' -v
+      - name: Verify OCR UI region extraction on synthetic original-style images
+        run: python -m unittest discover -s tests -p 'test_segment_ui_ocr_regions.py' -v
+      - name: Install original PDF extraction library
+        run: python -m pip install 'pymupdf>=1.24,<2'
+      - name: Verify synthetic source PDF question-to-image mapping and hash checks
+        run: python -m unittest discover -s tests -p 'test_held_pdf_source_regions.py' -v
+      - name: Verify fail-closed selected dropdown answer candidate detection
+        run: python -m unittest discover -s tests -p 'test_owner_marked_dropdown.py' -v
+      - name: Verify our gate against the cloned upstream valid V2 examples
+        run: python -m scripts.test_pinned_site_v2_contract upstream

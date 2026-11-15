@@ -1,0 +1,463 @@
+"""Phase 2 integrated source region OCR: fail-closed synthetic contract tests."""
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import cv2
+import numpy as np
+
+from scripts.phase2_source_region_ocr import (
+    extract, text_row_subregions, deduplicate_source_regions,
+    light_ui_rectangles, localized_text_region, word_cluster_regions,
+    _prepare_region_crop,
+)
+from scripts.patch_phase2_upstream_extractor import (
+    IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
+    patch as patch_upstream,
+)
+
+
+class RegionSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.t = tempfile.TemporaryDirectory()
+        self.addCleanup(self.t.cleanup)
+        self.file = Path(self.t.name) / "private-image.png"
+        a = np.full((180, 650, 3), 255, dtype=np.uint8)
+        self.assertTrue(cv2.imwrite(str(self.file), a))
+        self.specs = [{"id": "psm3", "psm": 3}, {"id": "psm6", "psm": 6}]
+        self.cfg = {"fidelity": {"min_word_confidence": 90,
+                                 "min_overall_confidence": 95}}
+        self.roi = [{"kind": "enclosed_text_control", "bbox": [40, 30, 350, 110]}]
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_two_independent_strict_passes_create_candidate_not_release(self, r):
+        r.return_value = self.roi
+        def ocr(path, cfg, spec):
+            self.assertTrue(Path(path).is_file())
+            return {"id": spec["id"], "text": "Independent source words",
+                    "words": [{"text": "Independent"}],
+                    "min_confidence": 95.0, "mean_confidence": 97.0}
+        results = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["usable_as_verified_source"])
+        self.assertFalse(results[0]["auto_approved_for_release"])
+        self.assertEqual([p["id"] for p in results[0]["passes"]], ["psm3", "psm6"])
+        self.assertEqual(results[0]["bbox_pixels"], [40, 30, 350, 110])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_ocr_disagreement_does_not_certify(self, r):
+        r.return_value = self.roi
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": spec["id"], "words": [1],
+                    "min_confidence": 99.0, "mean_confidence": 99.0}
+        result = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)[0]
+        self.assertFalse(result["two_pass_agreement"])
+        self.assertFalse(result["usable_as_verified_source"])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_confidence_below_original_threshold_cannot_certify(self, r):
+        r.return_value = self.roi
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source words", "words": [1],
+                    "min_confidence": 89.9, "mean_confidence": 98.0}
+        result = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)[0]
+        self.assertTrue(result["two_pass_agreement"])
+        self.assertFalse(result["confidence_pass"])
+        self.assertFalse(result["usable_as_verified_source"])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_empty_output_is_not_agreement(self, r):
+        r.return_value = self.roi
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "", "words": [],
+                    "min_confidence": None, "mean_confidence": None}
+        result = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)[0]
+        self.assertFalse(result["usable_as_verified_source"])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_invalid_coordinate_refused(self, r):
+        r.return_value = [{"kind": "enclosed_text_control",
+                           "bbox": [-1, 0, 300, 50]}]
+        self.assertEqual(extract(str(self.file), self.file.name,
+                                 lambda *_: None, self.specs, self.cfg), [])
+
+    def test_multi_line_control_yields_source_text_bands(self):
+        image = np.full((250, 520, 3), 255, np.uint8)
+        for y, text in [(70, "Alpha statement"), (114, "Beta option"),
+                        (158, "Gamma choice")]:
+            cv2.putText(image, text, (28, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 0, 0), 2)
+        bands = text_row_subregions(
+            image, {"kind": "enclosed_text_control",
+                    "bbox": [15, 35, 490, 200]})
+        self.assertEqual(len(bands), 3)
+        # Source text band must not crop off leading characters again.
+        self.assertEqual(bands[0]["bbox"][0], 15)
+        self.assertEqual(bands[0]["bbox"][2], 490)
+        self.assertTrue(all(x["kind"]=="enclosed_text_control_text_band" for x in bands))
+        self.assertTrue(all(0<=x["bbox"][1]<x["bbox"][3]<=250 for x in bands))
+
+    def test_no_text_cannot_create_source_words_or_fake_answer(self):
+        blank = np.full((200, 440, 3), 255, np.uint8)
+        self.assertEqual(text_row_subregions(blank, {
+            "kind": "matrix_statement_column", "bbox": [5, 5, 430, 185]
+        }), [])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    def test_unboxed_source_words_are_not_silently_lost(self, detected):
+        detected.return_value = []
+        picture = np.full((240, 600, 3), 255, np.uint8)
+        for y, words in ((75, "First statement"), (120, "Second statement"),
+                         (165, "Third statement")):
+            cv2.putText(picture, words, (35, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 0, 0), 2)
+        self.assertTrue(cv2.imwrite(str(self.file), picture))
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source evidence only",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        results = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
+        self.assertGreaterEqual(len(results), 2)
+        self.assertTrue(all(x["kind"].startswith("unboxed_source_text_text_band")
+                            for x in results))
+        self.assertTrue(all(not x["auto_approved_for_release"] for x in results))
+
+    def test_nested_source_panels_deduplicate_without_losing_distinct_boxes(self):
+        boxes = [{"kind": "enclosed_text_control", "bbox": x} for x in [
+            [66, 207, 320, 317], [66, 207, 320, 319],
+            [70, 209, 316, 317], [334, 207, 488, 317],
+            [334, 207, 488, 319], [338, 209, 484, 317],
+        ]]
+        dedup = deduplicate_source_regions(boxes)
+        self.assertEqual(len(dedup), 2)
+        self.assertTrue(all(x["bbox"][2]-x["bbox"][0] > 140 for x in dedup))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_busy_panel_budget_preserves_child_text_regions(self, bands, parents):
+        parents.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [5, 5, 450, 100]},
+            {"kind": "enclosed_text_control", "bbox": [5, 100, 450, 170]},
+        ]
+        bands.side_effect = lambda image, parent, **kw: [
+            {"kind": "enclosed_text_control_text_band",
+             "bbox": [20, parent["bbox"][1]+10+i*12,
+                      430, parent["bbox"][1]+20+i*12]}
+            for i in range(3)]
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source words",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg, max_regions=5)
+        self.assertEqual(len(found), 5)
+        self.assertEqual(sum(x["kind"].endswith("_text_band")
+                             for x in found), 3)
+        self.assertTrue(all(not x["auto_approved_for_release"] for x in found))
+
+    def test_low_contrast_admin_rows_extracted_from_original_style_screenshot(self):
+        image = np.full((360, 338, 3), 240, np.uint8)
+        for y, label in [(80, "Agent insights"),
+                         (140, "App insights"), (200, "Change history")]:
+            cv2.rectangle(image, (36, y), (298, y+29), (145, 145, 145), 1)
+            cv2.putText(image, label, (50, y+21),
+                        cv2.FONT_HERSHEY_SIMPLEX, .48, (30, 30, 30), 1)
+        found = light_ui_rectangles(image)
+        self.assertGreaterEqual(len(found), 3)
+        self.assertTrue(all(r["kind"] == "light_ui_text_control" for r in found))
+        self.assertTrue(all(r["bbox"][0] >= 36 and
+                            r["bbox"][2] <= 299 for r in found))
+
+    def test_blank_ui_does_not_invent_controls(self):
+        blank = np.full((360, 338, 3), 255, np.uint8)
+        self.assertEqual(light_ui_rectangles(blank), [])
+
+    def test_dropdown_text_localization_excludes_original_vertical_rules(self):
+        image = np.full((140, 650, 3), 255, dtype=np.uint8)
+        cv2.rectangle(image, (155, 20), (450, 120), (0, 0, 0), 2)
+        cv2.putText(image, "Data Catalog", (170, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, .60, (0, 0, 0), 2)
+        original = {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 83]}
+        result = localized_text_region(image, original)
+        self.assertIsNotNone(result)
+        self.assertGreaterEqual(result["bbox"][0], 164)
+        self.assertLess(result["bbox"][2], 450)
+        self.assertGreater(result["bbox"][2]-result["bbox"][0], 40)
+
+    def test_blank_ink_band_is_not_source_text(self):
+        image = np.full((140, 650, 3), 255, np.uint8)
+        self.assertIsNone(localized_text_region(image, {
+            "kind": "unboxed_source_text_text_band",
+            "bbox": [0, 50, 650, 83]
+        }))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_original_source_regions_cannot_be_evicted_by_new_ui_boxes(
+            self, bands, light, original):
+        original.return_value = [{"kind": "matrix_statement_column",
+                                  "bbox": [0, 0, 400, 130]}]
+        light.return_value = [
+            {"kind": "light_ui_text_control",
+             "bbox": [450, 1+i*18, 600, 17+i*18]}
+            for i in range(9)]
+        bands.return_value = []
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "retained source statement",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        result = extract(str(self.file), self.file.name, ocr, self.specs,
+                         self.cfg, max_regions=5)
+        self.assertEqual(len(result), 5)
+        self.assertEqual(result[0]["kind"], "matrix_statement_column")
+        self.assertTrue(result[0]["usable_as_verified_source"])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_mixed_boxed_and_unboxed_source_lines_are_preserved(
+            self, bands, light, original):
+        original.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [10, 10, 300, 80]}]
+        light.return_value = []
+        def rows(image, parent, **kw):
+            if parent["kind"] == "unboxed_source_text":
+                return [
+                    {"kind": "unboxed_source_text_text_band",
+                     "bbox": [0, 15, 650, 45]},
+                    {"kind": "unboxed_source_text_text_band",
+                     "bbox": [0, 125, 650, 150]}]
+            return []
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "genuine source words",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        result = extract(str(self.file), self.file.name, ocr,
+                         self.specs, self.cfg, max_regions=6)
+        kinds = [r["kind"] for r in result]
+        self.assertIn("enclosed_text_control", kinds)
+        self.assertIn("unboxed_source_text_text_band", kinds)
+        # A row overlapping an existing box is not duplicated.
+        self.assertEqual(kinds.count("unboxed_source_text_text_band"), 1)
+        self.assertTrue(all(r["auto_approved_for_release"] is False
+                            for r in result))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_mixed_layout_unboxed_ink_outside_box_is_not_discarded(
+            self, bands, light, original):
+        """Full-width row geometry must not hide ink outside a control."""
+        image = np.full((180, 650, 3), 255, np.uint8)
+        cv2.putText(image, "Standalone source text", (375, 64),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        self.assertTrue(cv2.imwrite(str(self.file), image))
+        original.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [10, 10, 300, 90]}]
+        light.return_value = []
+        def rows(image, parent, **kw):
+            if parent["kind"] == "unboxed_source_text":
+                return [{"kind": "unboxed_source_text_text_band",
+                         "bbox": [0, 40, 650, 78]}]
+            return []
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source candidate only",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg, max_regions=8)
+        self.assertIn("unboxed_source_text_text_band",
+                      [r["kind"] for r in found])
+        self.assertTrue(all(not r["auto_approved_for_release"]
+                            for r in found))
+
+    def test_canonical_patcher_idempotent_and_source_preserving(self):
+        root = Path(self.t.name)
+        (root / "pipeline/scripts").mkdir(parents=True)
+        (root / "skill").mkdir()
+        canonical = root / "pipeline/scripts/ocr_extract.py"
+        canonical.write_text("\n".join([
+            IMPORT_ANCHOR, "def process_item():", SETUP_ANCHOR,
+            "    for fn in qimg:", QUESTION_ANCHOR,
+            "def finish():", FINISH_ANCHOR,
+        ]))
+        for name in ("phase2_source_region_ocr.py", "segment_ui_ocr_regions.py"):
+            (root / "skill" / name).write_text("# synthetic helper\n")
+        patch_upstream(root / "pipeline", root / "skill")
+        before = canonical.read_text()
+        self.assertIn("rec['source_region_candidates'] = region_candidates", before)
+        patch_upstream(root / "pipeline", root / "skill")
+        self.assertEqual(before, canonical.read_text())
+
+    def test_canonical_patch_fails_on_mismatched_upstream(self):
+        root = Path(self.t.name)
+        (root / "pipeline/scripts").mkdir(parents=True)
+        (root / "skill").mkdir()
+        (root / "pipeline/scripts/ocr_extract.py").write_text("new, unrelated converter")
+        for name in ("phase2_source_region_ocr.py", "segment_ui_ocr_regions.py"):
+            (root / "skill" / name).write_text("# test\n")
+        with self.assertRaisesRegex(ValueError, "Pinned canonical upstream mismatch"):
+            patch_upstream(root / "pipeline", root / "skill")
+
+    def test_small_source_crops_grow_before_unchanged_passes(self):
+        """A tiny region must be handed to OCR upscaled; gates stay external."""
+        picture = np.full((120, 650, 3), 255, np.uint8)
+        cv2.putText(picture, "Data Catalog", (60, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, .45, (0, 0, 0), 1)
+        self.assertTrue(cv2.imwrite(str(self.file), picture))
+        small = {"kind": "enclosed_text_control_text_band",
+                 "bbox": [55, 25, 160, 48]}
+        large = {"kind": "enclosed_text_control_text_band",
+                 "bbox": [0, 60, 650, 118]}
+        small_native, small_ocr, small_factor = _prepare_region_crop(
+            picture, small["bbox"])
+        large_native, large_ocr, large_factor = _prepare_region_crop(
+            picture, large["bbox"])
+        self.assertEqual(small_factor, 2)
+        self.assertEqual(small_native.shape, (23, 105, 3))
+        self.assertEqual(small_ocr.shape, (46, 210, 3))
+        self.assertEqual(large_factor, 1)
+        self.assertIs(large_ocr, large_native)
+        self.assertEqual(large_ocr.shape, (58, 650, 3))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_ocr_receives_grown_small_region_file(self, bands, parents):
+        """extract() must write the upscaled pixels for a small source band."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [40, 30, 350, 110]}]
+        bands.side_effect = lambda image, parent, **kw: [
+            {"kind": "enclosed_text_control_text_band",
+             "bbox": [45, 40, 340, 58]}]
+        heights = []
+        def ocr(path, cfg, spec):
+            heights.append(cv2.imread(path).shape[0])
+            return {"id": spec["id"], "text": "source words", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
+        self.assertTrue(heights)
+        # The 18 px band never reaches OCR at native size: it is handed over
+        # grown to 36 px (the 80 px panel region stays at native 80 px).
+        self.assertIn(36, heights)
+        self.assertNotIn(18, heights)
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_unboxed_rows_are_localized_when_controls_exist(self, bands, parents):
+        """A standalone row beside a control keeps a tight localized crop."""
+        image = np.full((180, 650, 3), 255, np.uint8)
+        cv2.rectangle(image, (10, 10), (300, 90), (0, 0, 0), 2)
+        cv2.putText(image, "SharePoint", (400, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        self.assertTrue(cv2.imwrite(str(self.file), image))
+        parents.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [10, 10, 300, 90]}]
+        bands.side_effect = lambda image, parent, **kw: (
+            [{"kind": "unboxed_source_text_text_band",
+              "bbox": [0, 45, 650, 85]}]
+            if parent["kind"] == "unboxed_source_text" else [])
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source evidence", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg)
+        kinds = [r["kind"] for r in found]
+        self.assertIn("unboxed_source_text_text_band", kinds)
+        self.assertIn("unboxed_source_text_text_band_localized", kinds)
+        tight = next(r for r in found
+                     if r["kind"] == "unboxed_source_text_text_band_localized")
+        # Ink starts near x=400: localization must trim the empty left side.
+        self.assertGreater(tight["bbox_pixels"][0], 300)
+        self.assertLess(tight["bbox_pixels"][2] - tight["bbox_pixels"][0], 200)
+
+    def test_wide_gap_word_clusters_become_regions(self):
+        """Two ink groups far apart in one band each become their own crop."""
+        image = np.full((140, 650, 3), 255, np.uint8)
+        cv2.putText(image, "SharePoint", (70, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        cv2.putText(image, "Documents", (430, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        clusters = word_cluster_regions(
+            image, {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 90]})
+        self.assertEqual(len(clusters), 2)
+        self.assertTrue(all(c["kind"].endswith("_word_cluster")
+                            for c in clusters))
+        first, second = clusters
+        self.assertLess(first["bbox"][2], 300)
+        self.assertGreater(second["bbox"][0], 350)
+
+    def test_narrow_word_gaps_stay_one_cluster(self):
+        """Normal word spacing must not split a sentence into clusters."""
+        image = np.full((140, 650, 3), 255, np.uint8)
+        cv2.putText(image, "Microsoft Viva Insights", (70, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 0, 0), 2)
+        self.assertEqual(word_cluster_regions(
+            image, {"kind": "unboxed_source_text_text_band",
+                    "bbox": [0, 50, 650, 90]}), [])
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_light_ui_text_bands_not_starved_by_whole_control_crops(
+            self, bands, light, parents):
+        """Bounded budget: light-UI row bands are read before whole controls."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [5, 5, 400, 40]}]
+        light.return_value = [
+            {"kind": "light_ui_text_control",
+             "bbox": [5, 60 + i * 12, 300, 74 + i * 12]}
+            for i in range(9)]
+        def rows(image, parent, **kw):
+            if parent["kind"] == "light_ui_text_control":
+                return [{"kind": "light_ui_text_control_text_band",
+                         "bbox": [parent["bbox"][0] + 4,
+                                  parent["bbox"][1] + 3,
+                                  parent["bbox"][2] - 4,
+                                  parent["bbox"][3] - 3]}]
+            return []
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "admin row", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg, max_regions=10)
+        kinds = [r["kind"] for r in found]
+        self.assertEqual(len(found), 10)
+        # All 9 light-UI row bands must fit; whole control crops come after.
+        self.assertEqual(kinds.count("light_ui_text_control_text_band"), 9)
+        self.assertTrue(all(not r["auto_approved_for_release"]
+                            for r in found))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_duplicate_light_ui_band_of_original_panel_is_dropped(
+            self, bands, light, parents):
+        """A light-UI band duplicating an original band must not double-read."""
+        parents.return_value = [{"kind": "enclosed_text_control",
+                                 "bbox": [10, 10, 300, 90]}]
+        light.return_value = [{"kind": "light_ui_text_control",
+                               "bbox": [10, 10, 300, 90]}]
+        def rows(image, parent, **kw):
+            return [{"kind": parent["kind"] + "_text_band",
+                     "bbox": [parent["bbox"][0] + 5, parent["bbox"][1] + 8,
+                              parent["bbox"][2] - 5, parent["bbox"][1] + 26]}]
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "same source row", "words": [1],
+                    "min_confidence": 96, "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg)
+        band_kinds = [r["kind"] for r in found if r["kind"].endswith("_text_band")]
+        self.assertEqual(band_kinds,
+                         ["enclosed_text_control_text_band"])
+
+
+if __name__ == "__main__":
+    unittest.main()
