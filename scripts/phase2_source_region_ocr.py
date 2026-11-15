@@ -141,6 +141,37 @@ def light_ui_rectangles(image):
                          "method": "source_canny_low_contrast_rectangle"})
     return deduplicate_source_regions(controls)
 
+
+def localized_text_region(image, source_band):
+    """Tightly bound ink words inside original screenshot rows, not guessed text.
+
+    Vertical dropdown edges are removed from detection, preventing huge blank
+    source crops and preserving the original word pixels inside the crop.
+    """
+    x0, y0, x1, y1 = map(int, source_band["bbox"])
+    h, w = image.shape[:2]
+    if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+        return None
+    gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    if gray.shape[0] < 10 or gray.shape[1] < 55:
+        return None
+    mask = gray < 160
+    # Exclude long control edges before measuring horizontal word extent.
+    vertical_edges = mask.sum(axis=0) >= gray.shape[0] * .75
+    mask[:, vertical_edges] = False
+    active = np.flatnonzero(mask.sum(axis=0) >= 2)
+    if len(active) < 8:
+        return None
+    left = max(x0, x0 + int(active[0]) - 3)
+    right = min(x1, x0 + int(active[-1]) + 4)
+    if right - left < 34 or right - left >= (x1-x0)*.96:
+        return None
+    return {
+        "kind": source_band["kind"] + "_localized",
+        "bbox": [left, y0, right, y1],
+        "method": "source_ink_extent_without_dropdown_borders",
+    }
+
 def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     """Return source-region candidates with strict two-pass OCR evidence."""
     with open(image_path, "rb") as fh:
@@ -170,10 +201,23 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     # discarded every text band on busy SharePoint screenshots (q007).
     parents = sorted(found, key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
     child_bands = deduplicate_source_regions(derived)
+    # In unboxed dropdown screenshots the original band may be full width
+    # even though the option text occupies a small part of that width.
+    localized = []
+    for region in parents + child_bands:
+        if region["kind"].endswith("_text_band"):
+            tight = localized_text_region(image, region)
+            if tight:
+                localized.append(tight)
+    localized = deduplicate_source_regions(localized)
+    # Preserve all distinct original source panels first.
     if len(parents) >= max_regions:
         found = parents[:max_regions]
     else:
-        found = sorted(parents + child_bands[:max_regions-len(parents)],
+        count = max_regions - len(parents)
+        selected = child_bands[:count]
+        remaining = count - len(selected)
+        found = sorted(parents + selected + localized[:remaining],
                        key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
     if not found or len(pass_specs) < 2:
         return []
