@@ -7,7 +7,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from scripts.phase2_source_region_ocr import extract
+from scripts.phase2_source_region_ocr import extract, text_row_subregions
 from scripts.patch_phase2_upstream_extractor import (
     IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
     patch as patch_upstream,
@@ -77,6 +77,25 @@ class RegionSourceTests(unittest.TestCase):
                            "bbox": [-1, 0, 300, 50]}]
         self.assertEqual(extract(str(self.file), self.file.name,
                                  lambda *_: None, self.specs, self.cfg), [])
+
+    def test_multi_line_control_yields_source_text_bands(self):
+        image = np.full((250, 520, 3), 255, np.uint8)
+        for y, text in [(70, "Alpha statement"), (114, "Beta option"),
+                        (158, "Gamma choice")]:
+            cv2.putText(image, text, (28, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, .65, (0, 0, 0), 2)
+        bands = text_row_subregions(
+            image, {"kind": "enclosed_text_control",
+                    "bbox": [15, 35, 490, 200]})
+        self.assertEqual(len(bands), 3)
+        self.assertTrue(all(x["kind"]=="enclosed_text_control_text_band" for x in bands))
+        self.assertTrue(all(0<=x["bbox"][1]<x["bbox"][3]<=250 for x in bands))
+
+    def test_no_text_cannot_create_source_words_or_fake_answer(self):
+        blank = np.full((200, 440, 3), 255, np.uint8)
+        self.assertEqual(text_row_subregions(blank, {
+            "kind": "matrix_statement_column", "bbox": [5, 5, 430, 185]
+        }), [])
 
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
