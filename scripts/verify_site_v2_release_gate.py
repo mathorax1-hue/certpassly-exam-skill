@@ -18,6 +18,7 @@ LEAK = {"answer_key", "correct_option_ids", "correct_answer", "is_correct",
 VALID_STATUS = {"owner_key", "researched_official", "researched_unverified", "answer_not_found"}
 PASS_STATUS = {"owner_key", "researched_official"}
 ALLOWED_EVIDENCE = {"source_sha256", "source_question_count", "questions"}
+PROOF_KINDS = ("source", "interaction", "answer_mapping", "visual")
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -33,7 +34,7 @@ def traverse(value, prefix="$"):
     else:
         yield prefix, value
 
-def verify(exam_path, schema_path, registry_path, evidence_path):
+def verify(exam_path, schema_path, registry_path, evidence_path, source_path=None, proof_root=None):
     # Fail closed when schema engine is unavailable.
     try:
         from jsonschema import Draft202012Validator
@@ -44,6 +45,7 @@ def verify(exam_path, schema_path, registry_path, evidence_path):
     registry = json.loads(Path(registry_path).read_text(encoding="utf-8"))
     evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
     issues = []
+    proof_root = Path(proof_root).resolve() if proof_root is not None else Path(evidence_path).resolve().parent
     def issue(code, where, key=None):
         issues.append({"code": code, "path": where, **({"question_key": key} if key else {})})
     Draft202012Validator.check_schema(schema)
@@ -66,6 +68,14 @@ def verify(exam_path, schema_path, registry_path, evidence_path):
     source_sha = evidence.get("source_sha256")
     if not isinstance(source_sha, str) or not re.fullmatch("[0-9a-f]{64}", source_sha):
         issue("invalid_source_sha256", "$evidence.source_sha256")
+    if source_path is None:
+        issue("missing_source_file", "$source")
+    else:
+        try:
+            if digest(source_path) != source_sha:
+                issue("source_sha256_mismatch", "$source")
+        except OSError:
+            issue("source_file_unreadable", "$source")
     ev = evidence.get("questions")
     ev = ev if isinstance(ev, dict) else {}
     if len(ev) != len(questions): issue("evidence_count_mismatch", "$evidence.questions")
@@ -107,6 +117,28 @@ def verify(exam_path, schema_path, registry_path, evidence_path):
             if record.get("interaction_verified") is not True: issue("interaction_not_verified", "$evidence.questions." + key, key)
             if record.get("answer_mapping_verified") is not True: issue("answer_mapping_not_verified", "$evidence.questions." + key, key)
             if record.get("visual_verified") is not True: issue("visual_not_verified", "$evidence.questions." + key, key)
+            proof = record.get("proof")
+            proof = proof if isinstance(proof, dict) else {}
+            for kind in PROOF_KINDS:
+                entry = proof.get(kind)
+                at = "$evidence.questions." + key + ".proof." + kind
+                if not isinstance(entry, dict):
+                    issue("missing_proof", at, key)
+                    continue
+                rel = entry.get("path")
+                claimed = entry.get("sha256")
+                if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or "\\\\" in rel:
+                    issue("invalid_proof_path", at, key)
+                    continue
+                if not isinstance(claimed, str) or not re.fullmatch("[0-9a-f]{64}", claimed):
+                    issue("invalid_proof_sha256", at, key)
+                    continue
+                fp = (proof_root / rel).resolve()
+                if not fp.is_relative_to(proof_root) or not fp.is_file():
+                    issue("proof_file_missing_or_unsafe", at, key)
+                    continue
+                if digest(fp) != claimed:
+                    issue("proof_sha256_mismatch", at, key)
             if record.get("held") is True:
                 summary["held"] += 1
                 issue("question_held", "$evidence.questions." + key, key)
@@ -130,10 +162,12 @@ def main():
     p.add_argument("--schema", required=True)
     p.add_argument("--registry", required=True)
     p.add_argument("--evidence", required=True)
+    p.add_argument("--source-pdf", required=True, help="Immutable original source PDF, hashed against evidence")
+    p.add_argument("--proof-root", help="Private root directory containing per-question evidence files")
     p.add_argument("--report", required=True)
     args = p.parse_args()
     try:
-        result = verify(args.exam,args.schema,args.registry,args.evidence)
+        result = verify(args.exam,args.schema,args.registry,args.evidence,args.source_pdf,args.proof_root)
     except (OSError, ValueError, RuntimeError, TypeError) as e:
         result = {"status":"BLOCKED","release_eligible":False,
                   "issues":[{"code":"gate_execution_failed","error_type":type(e).__name__}]}
