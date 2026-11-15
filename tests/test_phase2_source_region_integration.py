@@ -211,6 +211,37 @@ class RegionSourceTests(unittest.TestCase):
         self.assertEqual(result[0]["kind"], "matrix_statement_column")
         self.assertTrue(result[0]["usable_as_verified_source"])
 
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.light_ui_rectangles")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_mixed_boxed_and_unboxed_source_lines_are_preserved(
+            self, bands, light, original):
+        original.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [10, 10, 300, 80]}]
+        light.return_value = []
+        def rows(image, parent, **kw):
+            if parent["kind"] == "unboxed_source_text":
+                return [
+                    {"kind": "unboxed_source_text_text_band",
+                     "bbox": [0, 15, 650, 45]},
+                    {"kind": "unboxed_source_text_text_band",
+                     "bbox": [0, 125, 650, 150]}]
+            return []
+        bands.side_effect = rows
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "genuine source words",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        result = extract(str(self.file), self.file.name, ocr,
+                         self.specs, self.cfg, max_regions=6)
+        kinds = [r["kind"] for r in result]
+        self.assertIn("enclosed_text_control", kinds)
+        self.assertIn("unboxed_source_text_text_band", kinds)
+        # A row overlapping an existing box is not duplicated.
+        self.assertEqual(kinds.count("unboxed_source_text_text_band"), 1)
+        self.assertTrue(all(r["auto_approved_for_release"] is False
+                            for r in result))
+
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
         (root / "pipeline/scripts").mkdir(parents=True)
