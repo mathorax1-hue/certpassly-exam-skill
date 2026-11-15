@@ -41,7 +41,15 @@ def marked_rectangles(image, threshold):
         if min(top, bottom, left, right) < .45:
             continue
         found.append((x, y, w, h))
-    return sorted(set(found))
+    # Thick rectangular outlines can generate an inner and outer contour.
+    # Treat overlapping near-identical geometry as ONE mark, never two keys.
+    distinct = []
+    for box in sorted(set(found), key=lambda z: z[2] * z[3]):
+        if any(max(abs(a - b) for a, b in zip(box, prior)) <= 5
+               for prior in distinct):
+            continue
+        distinct.append(box)
+    return sorted(distinct)
 
 
 def tesseract_text(image, mode):
