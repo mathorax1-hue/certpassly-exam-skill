@@ -200,7 +200,8 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
                 x0, y0, x1, y1 = control["bbox"]
                 overlap = max(0, min(rx1, x1)-max(rx0, x0)) * max(
                     0, min(ry1, y1)-max(ry0, y0))
-                if overlap / row_area >= .5:
+                control_area = max(1, (x1-x0)*(y1-y0))
+                if overlap / min(row_area, control_area) >= .5:
                     return True
             return False
         unboxed_bands = [row for row in unboxed_bands
