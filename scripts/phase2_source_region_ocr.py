@@ -81,6 +81,33 @@ def text_row_subregions(image, parent, max_bands=8):
         for a, b in bands
     ]
 
+
+def deduplicate_source_regions(found, overlap_threshold=0.82):
+    """Drop near-identical nested OCR panels without merging distinct UI boxes."""
+    def area(box):
+        return max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+
+    def iou(one, two):
+        dx = max(0, min(one[2], two[2]) - max(one[0], two[0]))
+        dy = max(0, min(one[3], two[3]) - max(one[1], two[1]))
+        intersection = dx * dy
+        union = area(one) + area(two) - intersection
+        return intersection / union if union else 0.0
+
+    kept = []
+    # Favor the source crop preserving MORE original text, not an inset copy
+    # that clips leading/trailing letters. Compare only the same region kind.
+    for row in sorted(found, key=lambda r: (-area(r["bbox"]),
+                                            r["bbox"][1], r["bbox"][0],
+                                            r["kind"])):
+        if any(row["kind"] == prev["kind"] and
+               iou(row["bbox"], prev["bbox"]) >= overlap_threshold
+               for prev in kept):
+            continue
+        kept.append(row)
+    return sorted(kept, key=lambda r: (r["bbox"][1], r["bbox"][0],
+                                      r["kind"]))
+
 def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     """Return source-region candidates with strict two-pass OCR evidence."""
     with open(image_path, "rb") as fh:
@@ -91,7 +118,7 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     H, W = image.shape[:2]
     if H == 0 or W == 0:
         return []
-    found = regions(image)
+    found = deduplicate_source_regions(regions(image))
     if not found:
         # Some screenshots have source text without a bordered control.
         # Extract actual ink-line bands as source candidates only.
@@ -105,14 +132,17 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
         if parent["kind"].endswith("_text_band"):
             continue
         derived.extend(text_row_subregions(image, parent))
-    found = sorted(found + derived,
-                   key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
-    if len(found) > max_regions:
-        # Do not discard the already-known parent controls when the image
-        # contains too many supplemental text bands.
-        found = sorted(regions(image),
+    # Reserve room for each distinct original panel, then use remaining
+    # OCR budget for individual text bands. The previous all-or-nothing cap
+    # discarded every text band on busy SharePoint screenshots (q007).
+    parents = sorted(found, key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
+    child_bands = deduplicate_source_regions(derived)
+    if len(parents) >= max_regions:
+        found = parents[:max_regions]
+    else:
+        found = sorted(parents + child_bands[:max_regions-len(parents)],
                        key=lambda d: (d["bbox"][1], d["bbox"][0], d["kind"]))
-    if len(found) > max_regions or len(pass_specs) < 2:
+    if not found or len(pass_specs) < 2:
         return []
     candidates = []
     for item in found:
