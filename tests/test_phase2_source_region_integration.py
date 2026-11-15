@@ -7,7 +7,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from scripts.phase2_source_region_ocr import extract, text_row_subregions
+from scripts.phase2_source_region_ocr import extract, text_row_subregions, deduplicate_source_regions
 from scripts.patch_phase2_upstream_extractor import (
     IMPORT_ANCHOR, SETUP_ANCHOR, QUESTION_ANCHOR, FINISH_ANCHOR,
     patch as patch_upstream,
@@ -118,6 +118,39 @@ class RegionSourceTests(unittest.TestCase):
         self.assertTrue(all(x["kind"]=="unboxed_source_text_text_band"
                             for x in results))
         self.assertTrue(all(not x["auto_approved_for_release"] for x in results))
+
+    def test_nested_source_panels_deduplicate_without_losing_distinct_boxes(self):
+        boxes = [{"kind": "enclosed_text_control", "bbox": x} for x in [
+            [66, 207, 320, 317], [66, 207, 320, 319],
+            [70, 209, 316, 317], [334, 207, 488, 317],
+            [334, 207, 488, 319], [338, 209, 484, 317],
+        ]]
+        dedup = deduplicate_source_regions(boxes)
+        self.assertEqual(len(dedup), 2)
+        self.assertTrue(all(x["bbox"][2]-x["bbox"][0] > 140 for x in dedup))
+
+    @patch("scripts.phase2_source_region_ocr.regions")
+    @patch("scripts.phase2_source_region_ocr.text_row_subregions")
+    def test_busy_panel_budget_preserves_child_text_regions(self, bands, parents):
+        parents.return_value = [
+            {"kind": "enclosed_text_control", "bbox": [5, 5, 450, 100]},
+            {"kind": "enclosed_text_control", "bbox": [5, 110, 450, 190]},
+        ]
+        bands.side_effect = lambda image, parent, **kw: [
+            {"kind": "enclosed_text_control_text_band",
+             "bbox": [20, parent["bbox"][1]+10+i*12,
+                      430, parent["bbox"][1]+20+i*12]}
+            for i in range(3)]
+        def ocr(path, cfg, spec):
+            return {"id": spec["id"], "text": "source words",
+                    "words": [1], "min_confidence": 96,
+                    "mean_confidence": 97}
+        found = extract(str(self.file), self.file.name, ocr,
+                        self.specs, self.cfg, max_regions=5)
+        self.assertEqual(len(found), 5)
+        self.assertEqual(sum(x["kind"].endswith("_text_band")
+                             for x in found), 3)
+        self.assertTrue(all(not x["auto_approved_for_release"] for x in found))
 
     def test_canonical_patcher_idempotent_and_source_preserving(self):
         root = Path(self.t.name)
