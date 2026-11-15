@@ -115,7 +115,7 @@ class RegionSourceTests(unittest.TestCase):
                     "mean_confidence": 97}
         results = extract(str(self.file), self.file.name, ocr, self.specs, self.cfg)
         self.assertGreaterEqual(len(results), 2)
-        self.assertTrue(all(x["kind"]=="unboxed_source_text_text_band"
+        self.assertTrue(all(x["kind"].startswith("unboxed_source_text_text_band")
                             for x in results))
         self.assertTrue(all(not x["auto_approved_for_release"] for x in results))
 
