@@ -108,6 +108,39 @@ def deduplicate_source_regions(found, overlap_threshold=0.82):
     return sorted(kept, key=lambda r: (r["bbox"][1], r["bbox"][0],
                                       r["kind"]))
 
+
+def light_ui_rectangles(image):
+    """Find low-contrast rectangular source text controls in admin UI shots.
+
+    Canny contour geometry permits real source-gray controls that binary
+    threshold=115 misses. It never reads selected answers or infers keys.
+    Source crops are later passed through BOTH original OCR confidence gates.
+    """
+    h, w = image.shape[:2]
+    if h < 60 or w < 150:
+        return []
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 30, 90)
+    controls = []
+    for contour in cv2.findContours(edges, cv2.RETR_LIST,
+                                    cv2.CHAIN_APPROX_SIMPLE)[0]:
+        x, y, ww, hh = cv2.boundingRect(contour)
+        if not (80 <= ww <= w * .95 and 17 <= hh <= h * .30
+                and 2.2 <= ww / max(hh, 1) <= 40):
+            continue
+        approx = cv2.approxPolyDP(contour,
+                                 .025 * cv2.arcLength(contour, True), True)
+        if len(approx) > 7:
+            continue
+        # A small inner inset removes gray UI strokes but retains all text.
+        box = [x + 3, y + 3, x + ww - 3, y + hh - 3]
+        if box[2] <= box[0] + 65 or box[3] <= box[1] + 10:
+            continue
+        controls.append({"kind": "light_ui_text_control",
+                         "bbox": box,
+                         "method": "source_canny_low_contrast_rectangle"})
+    return deduplicate_source_regions(controls)
+
 def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     """Return source-region candidates with strict two-pass OCR evidence."""
     with open(image_path, "rb") as fh:
@@ -118,7 +151,7 @@ def extract(image_path, filename, ocr_pass, pass_specs, cfg, *, max_regions=24):
     H, W = image.shape[:2]
     if H == 0 or W == 0:
         return []
-    found = deduplicate_source_regions(regions(image))
+    found = deduplicate_source_regions(regions(image) + light_ui_rectangles(image))
     if not found:
         # Some screenshots have source text without a bordered control.
         # Extract actual ink-line bands as source candidates only.
