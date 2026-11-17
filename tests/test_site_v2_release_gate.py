@@ -34,8 +34,12 @@ class ReleaseGateTests(unittest.TestCase):
         for name,data in [("exam",self.exam),("schema",self.schema),("registry",self.registry),("evidence",self.evidence)]:
             (self.d/(name+".json")).write_text(json.dumps(data))
         return verify(*(self.d/(name+".json") for name in ("exam","schema","registry","evidence")),self.source,self.d)
-    def test_synthetic_pass(self):
-        self.assertTrue(self.run_gate()["release_eligible"])
+    def test_synthetic_pass_is_candidate_only_not_final_release(self):
+        result = self.run_gate()
+        self.assertTrue(result["candidate_validation_eligible"])
+        self.assertFalse(result["final_exam_release_eligible"])
+        self.assertEqual(result["release_authority"], "phase6_candidate_validation_only")
+        self.assertNotIn("release_eligible", result)
     def test_html_rejected(self):
         self.exam["questions"][0]["learner"]["stem"][0]["content"][0]["text"]="<b>unsafe</b>"
         self.assertIn("html_or_script",[x["code"] for x in self.run_gate()["issues"]])
