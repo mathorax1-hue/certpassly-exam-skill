@@ -47,8 +47,11 @@ class ReleaseGateTests(unittest.TestCase):
         self.exam["questions"][0]["learner"]["correct_option_ids"]=[1]
         self.assertIn("answer_leak",[x["code"] for x in self.run_gate()["issues"]])
     def test_held_rejected(self):
-        self.evidence["questions"]["synthetic-q1"]["held"]=True
-        self.assertIn("question_held",[x["code"] for x in self.run_gate()["issues"]])
+        self.evidence["questions"]["synthetic-q1"]["held"] = True
+        result = self.run_gate()
+        self.assertIn("question_held", [x["code"] for x in result["issues"]])
+        self.assertFalse(result["candidate_validation_eligible"])
+        self.assertFalse(result["final_exam_release_eligible"])
     def test_count_mismatch_rejected(self):
         self.evidence["source_question_count"]=2
         self.assertIn("source_count_mismatch",[x["code"] for x in self.run_gate()["issues"]])
