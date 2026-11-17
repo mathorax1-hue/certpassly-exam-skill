@@ -31,7 +31,7 @@ The private evidence manifest contains `source_sha256` (64 lowercase hex), `sour
 
 Gate checks: schema validity, no raw HTML/scripts, learner answer leakage, canonical registry type and publishability, duplicate keys, source count completeness, status and scoring eligibility, held flags and independent evidence presence. Reports contain hashes and error codes only, never stems, options or answer keys.
 
-**Output semantics:** a clean result sets `candidate_validation_eligible: true` and `final_exam_release_eligible: false`. The Phase 6 process exit code reflects candidate validation only. The gate does not certify that an AB-900 candidate contains all 89 source questions, and it cannot authorize final release; full-package completion, Phase 7 staging acceptance and Phase 8 owner approval remain separate gates. The ambiguous legacy `release_eligible` field is intentionally not emitted.
+**Output semantics:** a clean result sets `candidate_validation_eligible: true` and `final_exam_release_eligible: false`. The Phase 6 process exit code reflects candidate validation only. The gate does not certify that a candidate contains every source question, and it cannot authorize final release; full-package completion, Phase 7 staging acceptance and Phase 8 owner approval remain separate gates. The ambiguous legacy `release_eligible` field is intentionally not emitted.
 
 **Limits:** No tool can guarantee 100% correctness. This gate cannot itself prove source fidelity, answer truth, encrypted database storage, live importer compatibility, keyboard/mobile behavior or practice/exam reveal security. Keep publication blocked until independent visual source review and real website staging/security tests pass. Do not relax thresholds to obtain a green report.
 
