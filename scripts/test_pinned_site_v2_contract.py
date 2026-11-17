@@ -53,7 +53,7 @@ def main(argv):
             result=verify(content_path,schema,registry,evidence,source,root)
             errs=[x["code"] for x in result["issues"]]
             outcomes.append({"example":example.name,"status":result["status"],"codes":errs})
-            if not result["release_eligible"]:
+            if not result["candidate_validation_eligible"]:
                 failures.append("valid example failed: "+example.name+" "+str(errs))
             # Negative mutation: invalid injected HTML must always be rejected.
             document["exam"]["name"]="<script>bad</script>"
