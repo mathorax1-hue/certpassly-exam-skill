@@ -24,6 +24,7 @@ From the repository root, with Python 3.11+:
 | python scripts/reconcile_visual_roles.py --input PRIVATE/visual-roles.json | Separate active and superseded screenshots; catch role and learner-safety errors | No by default |
 | python scripts/capture_official_source.py --help | Download and SHA-256-hash an allowlisted official page, verify proof quote | Private snapshots only |
 | python scripts/unpack_artifact_tree.py PRIVATE/archive.zip PRIVATE/unpacked | Expand nested artifact ZIP into folders with a checksummed file manifest | Private directories only |
+| python scripts/verify_site_v2_release_gate.py --help | Validate a site V2 candidate against a pinned schema, registry, source hash and private proof manifest | Read-only inputs; writes a hash/error-only report; never final-release authority |
 | python scripts/verify_tool_registry.py | Ensure tools, tests and policy entries exist | No |
 | python scripts/check_public_safety.py | Scan tracked public file paths | No |
 | bash scripts/bootstrap_upstream.sh | Fetch exact legacy runtime revision into ignored vendor/ | Network and ignored vendor/ |
