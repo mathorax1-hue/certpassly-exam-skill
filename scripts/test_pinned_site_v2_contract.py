@@ -53,14 +53,20 @@ def main(argv):
             result=verify(content_path,schema,registry,evidence,source,root)
             errs=[x["code"] for x in result["issues"]]
             outcomes.append({"example":example.name,"status":result["status"],"codes":errs})
-            if not result["release_eligible"]:
+            if not result["candidate_validation_eligible"]:
                 failures.append("valid example failed: "+example.name+" "+str(errs))
+            if result.get("final_exam_release_eligible") is not False:
+                failures.append("Phase 6 candidate pass incorrectly authorized final release: "+example.name)
+            if "release_eligible" in result:
+                failures.append("ambiguous legacy release_eligible field still emitted: "+example.name)
             # Negative mutation: invalid injected HTML must always be rejected.
             document["exam"]["name"]="<script>bad</script>"
             content_path.write_text(json.dumps(document))
             bad=verify(content_path,schema,registry,evidence,source,root)
             if "html_or_script" not in [x["code"] for x in bad["issues"]]:
                 failures.append("HTML mutation not rejected: "+example.name)
+            if bad.get("candidate_validation_eligible") is not False or bad.get("final_exam_release_eligible") is not False:
+                failures.append("blocked candidate reported an eligibility flag: "+example.name)
             if document is original:
                 failures.append("unexpected identity")
     # Verify the canonical upstream package guard with the *technical V2*

@@ -145,7 +145,14 @@ def verify(exam_path, schema_path, registry_path, evidence_path, source_path=Non
     for key in ev:
         if key not in seen: issue("orphan_source_evidence", "$evidence.questions", key)
     return {"status": "PASS" if not issues else "BLOCKED",
-            "release_eligible": not issues,
+            "candidate_validation_eligible": not issues,
+            "final_exam_release_eligible": False,
+            "release_authority": "phase6_candidate_validation_only",
+            "final_exam_release_note": (
+                "A Phase 6 candidate-validation pass is not final exam release approval; "
+                "full-package completion, Phase 7 staging acceptance, and Phase 8 owner "
+                "approval remain separate gates."
+            ),
             "exam_sha256": digest(exam_path),
             "schema_sha256": digest(schema_path),
             "registry_sha256": digest(registry_path),
@@ -169,13 +176,28 @@ def main():
     try:
         result = verify(args.exam,args.schema,args.registry,args.evidence,args.source_pdf,args.proof_root)
     except (OSError, ValueError, RuntimeError, TypeError) as e:
-        result = {"status":"BLOCKED","release_eligible":False,
-                  "issues":[{"code":"gate_execution_failed","error_type":type(e).__name__}]}
+        result = {
+            "status": "BLOCKED",
+            "candidate_validation_eligible": False,
+            "final_exam_release_eligible": False,
+            "release_authority": "phase6_candidate_validation_only",
+            "final_exam_release_note": (
+                "A Phase 6 candidate-validation pass is not final exam release approval; "
+                "full-package completion, Phase 7 staging acceptance, and Phase 8 owner "
+                "approval remain separate gates."
+            ),
+            "issues": [{"code": "gate_execution_failed", "error_type": type(e).__name__}],
+        }
     out=Path(args.report);out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(result,sort_keys=True,indent=2)+"\n",encoding="utf-8")
-    print(json.dumps({"status":result["status"],"report":str(out),
-                      "issue_count":len(result["issues"])}))
-    return 0 if result["release_eligible"] else 1
+    print(json.dumps({
+        "status": result["status"],
+        "candidate_validation_eligible": result["candidate_validation_eligible"],
+        "final_exam_release_eligible": result["final_exam_release_eligible"],
+        "report": str(out),
+        "issue_count": len(result["issues"]),
+    }))
+    return 0 if result["candidate_validation_eligible"] else 1
 
 if __name__=="__main__":
     sys.exit(main())

@@ -98,3 +98,14 @@ Every future incident or test finding should record:
 - What remains blocked and who has authority to approve.
 
 **Source of truth:** This historical ledger is supplementary. The public scripts and private evidence always outrank any conversation summary.
+
+
+## 2026-11-17: Phase 6 candidate gate confused candidate validation with final release
+
+**Observed:** A clean synthetic site V2 candidate produced a generic `release_eligible` boolean, and the CLI used that same field for its exit code. The verifier compared the candidate record count only with the count supplied in its evidence manifest; it did not independently establish that the candidate represented the complete source exam. Its own limits already excluded source-PDF semantic comparison and live importer/security acceptance.
+
+**Root cause:** The report contract collapsed a Phase 6 technical candidate result into a name that could be mistaken for final exam release authority.
+
+**Fix:** Replace the ambiguous field with `candidate_validation_eligible`; emit `final_exam_release_eligible: false` unconditionally from this Phase 6 gate; mark the authority as `phase6_candidate_validation_only`; and base the process exit code only on candidate validation. Update the pinned-upstream consumer, regression tests, tool registry, dependency docs and operator guidance. No answer or release decision is made by this tool.
+
+**Regression proof:** Public synthetic CI at the exact feature-branch commit exercises candidate pass, held-candidate block, absence of the legacy field and CLI exit behavior. Pinned upstream compatibility tests remain green. This proves code behavior on synthetic data only; it does not certify any private exam, source fidelity or website staging.

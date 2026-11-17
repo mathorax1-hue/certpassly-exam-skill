@@ -154,6 +154,17 @@
       "release_authority": false
     },
     {
+      "id": "site_v2_candidate_validation",
+      "path": "scripts/verify_site_v2_release_gate.py",
+      "test": "tests/test_site_v2_release_gate.py",
+      "command": "python scripts/verify_site_v2_release_gate.py --exam PRIVATE/exam.json --schema PINNED_UPSTREAM/reference/site-format/v2/question.schema.json --registry PINNED_UPSTREAM/reference/site-format/v2/question_types.json --evidence PRIVATE/evidence.json --source-pdf PRIVATE/source.pdf --proof-root PRIVATE/proofs --report PRIVATE/report.json",
+      "dependencies": "Python 3.11+; jsonschema>=4.18,<5 (install with python -m pip install -e '.[schema]')",
+      "side_effects": "read-only input verification; writes a hash/error-only report to --report; exit 0 for candidate validation pass and 1 when blocked; never authorizes final release",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
       "id": "tool_registry_validator",
       "path": "scripts/verify_tool_registry.py",
       "test": "tests/test_tool_registry.py",
