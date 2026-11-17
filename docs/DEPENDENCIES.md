@@ -33,6 +33,7 @@ The syntax above works in a Unix shell. In PowerShell, assign PYTHONPATH with: $
 | pdf | PyMuPDF PDF extraction and inspection | python -m pip install -e ".[pdf]" | Optional; not answer approval |
 | visual | Pillow and OpenCV pixel comparison | python -m pip install -e ".[visual]" | Optional; not semantic verification |
 | browser | Playwright for page rendering | python -m pip install -e ".[browser]" | Optional; browser install may be required |
+| schema | JSON Schema validation for the independent site V2 candidate gate | python -m pip install -e ".[schema]" | Optional; candidate validation only, not final release approval |
 | mcp | Read-only MCP diagnostic server | python -m pip install -e ".[mcp]" | Optional; no automatic ChatGPT connector |
 | dev | pytest and Ruff | python -m pip install -e ".[dev]" | Optional; unittest needs no third party package |
 
