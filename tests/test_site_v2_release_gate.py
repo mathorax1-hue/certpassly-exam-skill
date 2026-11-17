@@ -1,10 +1,13 @@
 """Synthetic, answer-free regression tests for the independent V2 gate."""
 import hashlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
-from scripts.verify_site_v2_release_gate import verify, HTML
+from unittest.mock import patch
+from scripts.verify_site_v2_release_gate import verify, HTML, main
 
 class ReleaseGateTests(unittest.TestCase):
     def setUp(self):
@@ -40,6 +43,32 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertFalse(result["final_exam_release_eligible"])
         self.assertEqual(result["release_authority"], "phase6_candidate_validation_only")
         self.assertNotIn("release_eligible", result)
+    def test_cli_exit_code_tracks_candidate_validation_not_final_release(self):
+        self.run_gate()
+        report = self.d / "report.json"
+        argv = [
+            "verify_site_v2_release_gate.py",
+            "--exam", str(self.d / "exam.json"),
+            "--schema", str(self.d / "schema.json"),
+            "--registry", str(self.d / "registry.json"),
+            "--evidence", str(self.d / "evidence.json"),
+            "--source-pdf", str(self.source),
+            "--proof-root", str(self.d),
+            "--report", str(report),
+        ]
+        output = io.StringIO()
+        with patch("sys.argv", argv), redirect_stdout(output):
+            self.assertEqual(main(), 0)
+        result = json.loads(report.read_text())
+        self.assertTrue(result["candidate_validation_eligible"])
+        self.assertFalse(result["final_exam_release_eligible"])
+        self.assertNotIn("release_eligible", result)
+
+        self.evidence["questions"]["synthetic-q1"]["held"] = True
+        self.run_gate()
+        with patch("sys.argv", argv), redirect_stdout(io.StringIO()):
+            self.assertEqual(main(), 1)
+
     def test_html_rejected(self):
         self.exam["questions"][0]["learner"]["stem"][0]["content"][0]["text"]="<b>unsafe</b>"
         self.assertIn("html_or_script",[x["code"] for x in self.run_gate()["issues"]])
