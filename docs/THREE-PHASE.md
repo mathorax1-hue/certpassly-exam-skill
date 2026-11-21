@@ -59,6 +59,19 @@ python scripts/run_three_phase.py --exam CODE --workspace /path/work --upstream 
 
 Stdout is a counts summary only.
 
+
+## Inbox, source versions, and question updates
+
+Owner PDFs are dropped in private raw-exam at `inbox/<EXAM-CODE>/`. `scripts/inbox_ingest.py` hashes each file and records it in `exams/<CODE>/sources.json`. A duplicate sha256 is skipped. A new code creates `exams/<CODE>/`. An existing code with a new file becomes a new version. Every version is kept under `source-versions/vN/` and is never deleted. Inbox files are moved to `inbox/<CODE>/ingested/` after they are processed. The script prints counts only.
+
+On each technical run, `scripts/question_fingerprint.py` builds a stable sha256 from the normalized stem, choices, and answer (type is stored but is not part of the identity). It classifies each item as same (keep the old ID and prior review), changed (keep the ID, mark changed, and regate), new (allocate a new ID that never reuses a retired key), or retired (old items that are missing; never deleted without owner approval). In-batch or cross-PDF duplicate fingerprints are kept once. A leak-safe change report (JSON and Markdown, IDs and hashes only) is written next to the public summary. Counts for same, changed, new, retired, and duplicate are included in `public-summary.json`.
+
+`scripts/seed_exam_index.py` can register existing `source/` PDFs and build a hash-only `questions-index.json` from the latest run so a later unchanged rebuild reports `same`.
+
+## Bulk builder
+
+One owner-triggered action starts from private raw-exam and runs in public `mathorax1-hue/exam` so minutes bill to the public repository. `scripts/list_bulk_exams.py` selects inbox-new or source-changed exams by default (`new`). The owner may pass a comma-separated list, or `all` (every exam that already has a source PDF; do not use `all` by accident). The public workflow runs the technical phase in a matrix with `fail-fast: false` and a capped `max-parallel` (default 2). One failing exam never stops the others. `scripts/write_bulk_summary.py` writes `reports/bulk/<run-id>/summary.json` and `summary.md` with exported, held, failed, same, changed, new, and retired counts per exam. AI vision stays off by default (`provider` none). Public logs stay counts-only and the leak check stays on. Exams whose code starts with `TEST-` are never promoted.
+
 ## Upstream patch applied in Actions
 
 The public three-phase workflow (and the disabled-by-default private fallback) checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies every `patches/upstream/v1.3.0-*.patch` in name order:

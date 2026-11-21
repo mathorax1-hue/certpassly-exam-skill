@@ -85,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         PRIVATE_LOG = None
     ws = args.workspace.resolve()
     exam = args.exam
+    if exam.startswith("TEST-") and args.promote:
+        args.promote = False
     if args.raw_dir:
         prep = [args.python, str(HERE / "prepare_exam_workspace.py"),
                 "--raw-dir", str(args.raw_dir), "--workspace", str(ws),
@@ -104,6 +106,15 @@ def main(argv: list[str] | None = None) -> int:
     site = site_file(ws, exam)
     reports = ws / "out" / exam / "phase-reports"
     reports.mkdir(parents=True, exist_ok=True)
+    change_counts = {}
+    if args.raw_dir:
+        run([args.python, str(HERE / "question_fingerprint.py"),
+             "--exam", exam, "--run-dir", str(ws / "out" / exam),
+             "--raw-dir", str(args.raw_dir),
+             "--reports-dir", str(reports)])
+        cr = reports / "change-report.json"
+        if cr.is_file():
+            change_counts = (json.loads(cr.read_text(encoding="utf-8")) or {}).get("counts") or {}
     worklist = reports / "research-worklist.json"
     run([args.python, str(HERE / "build_research_worklist.py"),
          "--exam", exam, "--export-dir", str(exp), "--output", str(worklist)])
@@ -154,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         "promotion": promo.get("status"),
         "promotion_blocker_count": len(blockers),
         "promotion_blockers": blockers,
+        "same": change_counts.get("same"),
+        "changed": change_counts.get("changed"),
+        "new": change_counts.get("new"),
+        "retired": change_counts.get("retired"),
+        "duplicate": change_counts.get("duplicate"),
     }
     (reports / "public-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     # Printed log: counts and pass/fail only. No held reasons, stems, or paths.
