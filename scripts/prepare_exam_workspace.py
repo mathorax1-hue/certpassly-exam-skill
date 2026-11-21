@@ -143,6 +143,13 @@ def prepare(raw_dir: Path, workspace: Path, exam: str, links: Path | None, pipel
         for src in sorted(review_src.glob("*.json")):
             shutil.copy2(src, dest_review / src.name)
             review_files.append(src.name)
+        ai_dir = review_src / "ai-reads"
+        if ai_dir.is_dir():
+            dest_ai = dest_review / "ai-reads"
+            dest_ai.mkdir(parents=True, exist_ok=True)
+            for src in sorted(ai_dir.glob("*.json")):
+                shutil.copy2(src, dest_ai / src.name)
+                review_files.append("ai-reads/" + src.name)
 
     return {"exam_code": exam, "files": copied, "catalog": str(catalog), "workspace": str(workspace), "review_files": review_files}
 

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "exam_code": "EXAM-CODE",
+  "source": "ai_vision",
+  "items": [
+    {
+      "question_key": "q003",
+      "transcribed_text": "The transcription of the image goes here.",
+      "confidence": 0.0,
+      "model": "ai_vision",
+      "source": "ai_vision",
+      "image_sha256": ""
+    }
+  ]
+}
