@@ -235,7 +235,7 @@
       "path": "scripts/run_three_phase.py",
       "test": "tests/test_three_phase_pin.py",
       "command": "python scripts/run_three_phase.py --exam CODE --workspace PRIVATE/work --upstream vendor/certpassly-exam-pipeline",
-      "dependencies": "Pinned upstream v1.3.0 checkout plus the tools above",
+      "dependencies": "Pinned upstream v1.3.1 checkout plus the tools above",
       "side_effects": "Runs technical stages in a private workspace, writes phase reports, promotes only when all gates pass and --promote is set",
       "owner": "CertPassly Team",
       "scope": "shared",

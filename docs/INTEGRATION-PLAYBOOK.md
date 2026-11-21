@@ -66,6 +66,6 @@ The skill is a reusable tool and documentation home. Reading it does not retrain
 
 State: exact repository and working branch, relevant commits/CI links, known exam code, source item count, AI crosschecked vs independent-approved counts, screenshot role counts and superseded refs, evidence snapshot dates, files updated, failed attempts, outstanding conflicts, and authorized next action. Source private details must stay in raw-exam rather than this public guide.
 
-## Three-phase v1.3.0 path
+## Three-phase v1.3.1 path
 
-The reviewed upstream pin is now `d9b6bf67efb870019dd88caeffa90952b7e000d3` (v1.3.0). Use [THREE-PHASE.md](THREE-PHASE.md) for the technical, research and content stages. The old 15-stage authoring path remains available through `certpassly upstream-run`. The new default technical stages are intake, extract, export, validate_site and package. Ready-exams promotion still requires every gate, including the local site importer sandbox and an explicit `--promote`. Automatic promotion stays forbidden.
+The reviewed upstream pin is now `c8d4400598c225c6a32f029f28ca24429649edd6` (v1.3.1). Use [THREE-PHASE.md](THREE-PHASE.md) for the technical, research and content stages. The old 15-stage authoring path remains available through `certpassly upstream-run`. The new default technical stages are intake, extract, export, validate_site and package. Ready-exams promotion still requires every gate, including the local site importer sandbox and an explicit `--promote`. Automatic promotion stays forbidden.

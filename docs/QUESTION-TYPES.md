@@ -2,8 +2,7 @@
 
 The technical phase (PDF to site v2, no AI by default) builds a question only
 when exactly one type fits, every word is accounted for, and the answer comes
-from the PDF. Anything else is held with a reason. The upstream code is in
-`patches/upstream/v1.3.0-question-type-builders.patch`.
+from the PDF. Anything else is held with a reason. The upstream code is in certpassly-exam-pipeline v1.3.1 (`c8d4400598c225c6a32f029f28ca24429649edd6`).
 
 ## How each type is found
 

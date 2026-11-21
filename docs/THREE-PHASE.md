@@ -11,7 +11,7 @@ This is the permanent path from an owner PDF to a CertPassly site v2 draft. Scri
 
 ## Upstream pin
 
-The technical runner is the public upstream `msaqlainhaneef1/certpassly-exam-pipeline` at reviewed commit `d9b6bf67efb870019dd88caeffa90952b7e000d3` (tag v1.3.0). Do not vendor that source. Use `scripts/bootstrap_upstream.sh` or `certpassly upstream-run`.
+The technical runner is the public upstream `msaqlainhaneef1/certpassly-exam-pipeline` at reviewed commit `c8d4400598c225c6a32f029f28ca24429649edd6` (tag v1.3.1). Do not vendor that source. Use `scripts/bootstrap_upstream.sh` or `certpassly upstream-run`.
 
 ## Phase 1: technical, no AI, no web
 
@@ -72,17 +72,8 @@ On each technical run, `scripts/question_fingerprint.py` builds a stable sha256 
 
 One owner-triggered action starts from private raw-exam and runs in public `mathorax1-hue/exam` so minutes bill to the public repository. `scripts/list_bulk_exams.py` selects inbox-new or source-changed exams by default (`new`). The owner may pass a comma-separated list, or `all` (every exam that already has a source PDF; do not use `all` by accident). The public workflow runs the technical phase in a matrix with `fail-fast: false` and a capped `max-parallel` (default 2). One failing exam never stops the others. `scripts/write_bulk_summary.py` writes `reports/bulk/<run-id>/summary.json` and `summary.md` with exported, held, failed, same, changed, new, and retired counts per exam. AI vision stays off by default (`provider` none). Public logs stay counts-only and the leak check stays on. Exams whose code starts with `TEST-` are never promoted.
 
-## Upstream patch applied in Actions
+## Upstream patches in Actions
 
-The public three-phase workflow (and the disabled-by-default private fallback) checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies every `patches/upstream/v1.3.0-*.patch` in name order:
+The public three-phase workflow (and the disabled-by-default private fallback) checks out pinned upstream `v1.3.1` (`c8d4400598c225c6a32f029f28ca24429649edd6`). The earlier v1.3.0 skill patches (ligature repair, OCR retry, page-region and Groq vision, 429 pacing, question-type builders, and staging type builders) plus the generic choose-N `answer_count_mismatch` hold are in that tag. There are no extra skill patches on top of v1.3.1. If a later fix is needed before the next upstream tag, add it as `patches/upstream/v1.3.1-*.patch`; the workflow applies those files in name order.
 
-1. `v1.3.0-lead-ligature-complete-words.patch` stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`.
-2. `v1.3.0-ocr-retry-review-sheet.patch` adds the OCR retry pass, the review sheet, and owner-corrections support.
-3. `v1.3.0-page-region-ai-vision.patch` adds the 400 dpi page-region retry and the AI vision hook (off by default; committed `ai-reads.json` files are still read). The AI acceptance rule uses high-confidence words from the original OCR passes, not a later failed retry.
-4. `v1.3.0-page-region-ai-vision2-groq.patch` adds the Groq provider. It stays off unless a private runner sets provider groq. Public exam dispatch stays refused and does not enable Groq.
-5. `v1.3.0-page-region-ai-vision3-groq-images.patch` stitches more than 3 held crops into one image, because the Qwen model rejects a request with more than 3 images, and prefers the 400 dpi crop files.
-6. `v1.3.0-question-type-builders.patch` reads every question type the site accepts from the PDF, scripts only: Yes/No and choice grids, drop-down answer areas, image hotspots, ordering, matching, categorization, drag and drop, scenario and case study groups. See [question types](QUESTION-TYPES.md).
-7. `v1.3.0-ratelimit-groq-429.patch` waits and retries on Groq HTTP 429 using Retry-After, x-ratelimit-reset-tokens, or a try-again message (capped, at most two waits per item), and paces calls to a 6000 ITPM budget so later items are less likely to hit the limit.
-8. `v1.3.0-staging-type-builders.patch` adds PDF builders for the four staging types that already have a v2 answer layout: multi_select_matrix, text_cloze, short_text and numeric. They are tagged staging_draft_only and stay drafts until the site publishable flag is on.
-
-The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.
+The fidelity coverage gate stays strict.
