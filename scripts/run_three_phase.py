@@ -57,9 +57,15 @@ def main(argv: list[str] | None = None) -> int:
     ws = args.workspace.resolve()
     exam = args.exam
     if args.raw_dir:
-        run([args.python, str(HERE / "prepare_exam_workspace.py"),
-             "--raw-dir", str(args.raw_dir), "--workspace", str(ws),
-             "--exam", exam] + (["--exam-links", str(args.exam_links)] if args.exam_links else []))
+        prep = [args.python, str(HERE / "prepare_exam_workspace.py"),
+                "--raw-dir", str(args.raw_dir), "--workspace", str(ws),
+                "--exam", exam]
+        if args.exam_links:
+            prep.extend(["--exam-links", str(args.exam_links)])
+        example = args.upstream.resolve() / "config" / "pipeline.example.yaml"
+        if example.is_file():
+            prep.extend(["--pipeline-example", str(example)])
+        run(prep)
     pipeline = args.upstream.resolve() / "scripts" / "run_pipeline.py"
     if not pipeline.is_file():
         print(f"ERROR: upstream runner missing: {pipeline}", file=sys.stderr)

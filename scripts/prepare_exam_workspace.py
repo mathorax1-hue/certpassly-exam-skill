@@ -76,7 +76,7 @@ def catalog_row(exam: str, manifest: dict, links: Path | None) -> dict:
     return row
 
 
-def prepare(raw_dir: Path, workspace: Path, exam: str, links: Path | None) -> dict:
+def prepare(raw_dir: Path, workspace: Path, exam: str, links: Path | None, pipeline_example: Path | None = None) -> dict:
     manifest = load_manifest(raw_dir)
     code = str(manifest.get("exam_code") or exam)
     if code != exam:
@@ -111,12 +111,30 @@ def prepare(raw_dir: Path, workspace: Path, exam: str, links: Path | None) -> di
     rights = str(manifest.get("owner_rights_statement") or "").strip()
     if not rights:
         raise SystemExit("ERROR: manifest is missing owner_rights_statement")
-    # Escape for a double-quoted YAML scalar
+    dest_yaml = cfg / "pipeline.yaml"
+    if pipeline_example and pipeline_example.is_file():
+        dest_yaml.write_text(pipeline_example.read_text(encoding="utf-8"), encoding="utf-8")
+    elif not dest_yaml.is_file():
+        dest_yaml.write_text(
+            "brand: CertPassly\n"
+            "disclaimer: \"CertPassly is an independent exam preparation platform. "
+            "CertPassly is not sponsored, endorsed, run or approved by the vendors whose exams we cover.\"\n",
+            encoding="utf-8",
+        )
+    text = dest_yaml.read_text(encoding="utf-8")
     escaped = rights.replace("\\", "\\\\").replace('"', '\\"')
-    (cfg / "pipeline.yaml").write_text(
-        "owner_rights_statement: \"" + escaped + "\"\n",
-        encoding="utf-8",
-    )
+    line = "owner_rights_statement: \"" + escaped + "\"\n"
+    if "owner_rights_statement:" in text:
+        lines = []
+        for raw in text.splitlines(True):
+            if raw.startswith("owner_rights_statement:"):
+                lines.append(line)
+            else:
+                lines.append(raw)
+        dest_yaml.write_text("".join(lines), encoding="utf-8")
+    else:
+        dest_yaml.write_text(text.rstrip() + "\n" + line, encoding="utf-8")
+
     return {"exam_code": exam, "files": copied, "catalog": str(catalog), "workspace": str(workspace)}
 
 
@@ -126,9 +144,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", required=True, type=Path)
     ap.add_argument("--exam", required=True)
     ap.add_argument("--exam-links", type=Path)
+    ap.add_argument("--pipeline-example", type=Path, help="Upstream config/pipeline.example.yaml")
     ap.add_argument("--output", type=Path)
     args = ap.parse_args(argv)
-    report = prepare(args.raw_dir, args.workspace, args.exam, args.exam_links)
+    report = prepare(args.raw_dir, args.workspace, args.exam, args.exam_links, args.pipeline_example)
     text = json.dumps(report, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

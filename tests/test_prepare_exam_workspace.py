@@ -35,6 +35,8 @@ class PrepareWorkspaceTests(unittest.TestCase):
             self.assertTrue((ws / "owner-files" / "SYN-100" / "SYN-100.pdf").is_file())
             yaml_text = (ws / "config" / "pipeline.yaml").read_text(encoding="utf-8")
             self.assertIn("owner affirmed permission", yaml_text)
+            self.assertIn("brand: CertPassly", yaml_text)
+            self.assertIn("disclaimer:", yaml_text)
 
     def test_rejects_git_lfs_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
