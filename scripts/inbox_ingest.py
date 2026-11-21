@@ -37,7 +37,8 @@ def sha256_file(path: Path) -> str:
 
 def safe_filename(name: str) -> str:
     base = os.path.basename(name or "")
-    base = re.sub(r"[^A-Za-z0-9._()-]+", "_", base).strip("._")
+    base = base.replace(chr(92), "_").replace("/", "_")
+    base = "".join(ch for ch in base if ord(ch) >= 32 and ch != chr(127)).strip(" .")
     if not base.lower().endswith(".pdf"):
         base = (base or "source") + ".pdf"
     return base[:180]
@@ -119,7 +120,7 @@ def ensure_manifest(exam_dir: Path, exam_code: str) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def add_version(exam_dir: Path, data: dict, src: Path, sha: str, created: bool) -> dict:
+def add_version(exam_dir: Path, data: dict, src: Path, sha: str, created: bool, activate: bool = True) -> dict:
     version = next_version(data)
     filename = safe_filename(src.name)
     stored = exam_dir / "source-versions" / ("v%s" % version) / filename
@@ -127,12 +128,16 @@ def add_version(exam_dir: Path, data: dict, src: Path, sha: str, created: bool) 
     for row in data.get("sources") or []:
         if row.get("status") == "active":
             row["status"] = "superseded"
+    try:
+        stored_path = str(stored.relative_to(exam_dir.parent.parent if exam_dir.parent.name == "exams" else exam_dir))
+    except ValueError:
+        stored_path = str(stored)
     row = {
         "version": version,
         "sha256": sha,
         "filename": filename,
         "bytes": src.stat().st_size,
-        "stored_path": str(stored.relative_to(exam_dir.parent.parent) if exam_dir.parent.name == "exams" else stored),
+        "stored_path": stored_path,
         "ingested_at": utc_now(),
         "status": "active",
     }
@@ -142,7 +147,8 @@ def add_version(exam_dir: Path, data: dict, src: Path, sha: str, created: bool) 
     if created and not data.get("created_at"):
         data["created_at"] = data["updated_at"]
     write_sources(exam_dir / "sources.json", data)
-    activate_current_source(exam_dir, stored, filename)
+    if activate:
+        activate_current_source(exam_dir, stored, filename)
     ensure_manifest(exam_dir, data.get("exam_code") or exam_dir.name)
     return {"action": "new_exam" if created else "update", "version": version, "sha256": sha}
 
@@ -229,7 +235,7 @@ def register_existing_sources(raw_root: Path, exam_codes: list[str] | None = Non
             if sha in known:
                 summary["skipped_duplicate"] += 1
                 continue
-            add_version(exam_dir, data, pdf, sha, created=not bool(data.get("sources")))
+            add_version(exam_dir, data, pdf, sha, created=not bool(data.get("sources")), activate=False)
             data = load_sources(exam_dir / "sources.json", exam_dir.name)
             known = known_hashes(data)
             summary["registered"] += 1

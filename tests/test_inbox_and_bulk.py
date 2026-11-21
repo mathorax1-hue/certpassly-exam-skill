@@ -83,6 +83,16 @@ class InboxTests(unittest.TestCase):
         sources = json.loads((exam / "sources.json").read_text(encoding="utf-8"))
         self.assertEqual(len(sources["sources"]), 1)
 
+    def test_register_keeps_existing_source_name(self):
+        exam = self.root / "exams" / "TEST-UPDATE-B"
+        original = exam / "source" / "TEST-UPDATE-B (2 items).pdf"
+        write_pdf(original, MIN_PDF)
+        I.register_existing_sources(self.root, ["TEST-UPDATE-B"])
+        self.assertTrue(original.is_file())
+        self.assertEqual(list((exam / "source").glob("*.pdf")), [original])
+        sources = json.loads((exam / "sources.json").read_text(encoding="utf-8"))
+        self.assertEqual(sources["sources"][0]["filename"], "TEST-UPDATE-B (2 items).pdf")
+
     def test_invalid_code_skipped(self):
         write_pdf(self.inbox / "not a code" / "x.pdf", MIN_PDF)
         report = I.ingest_inbox(self.root, self.inbox)
