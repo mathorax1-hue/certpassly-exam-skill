@@ -1,0 +1,1160 @@
+From f8da5b3e768151251188f108d86fbd7dc51803c7 Mon Sep 17 00:00:00 2001
+From: "mathorax.com" <mathorax1@gmail.com>
+Date: Sat, 21 Nov 2026 17:00:53 +0500
+Subject: [PATCH] Add OCR retry, review sheet, and owner corrections
+
+Retry only items held for OCR quality: enhance the cropped image at
+about 3x (or raster a PDF page at 350 dpi when there is no image),
+then rerun both fidelity OCR passes. Export only if the same strict
+gate still passes. Settings live in config/ocr.json under retry.
+Every attempt is logged in export/ocr-retry.json.
+
+Still-held items are written to a review sheet (JSON, markdown, and
+HTML) with image path, OCR text, PDF text, hold reason, and empty
+owner_text / owner_decision fields that are never auto-filled.
+
+A committed review/owner-corrections.json is read on the next run.
+Complete corrections (owner_decision plus a structured stem) are
+exported as owner_checked, with who, when, and the image sha256, and
+still must pass schema and type rules.
+---
+ CHANGELOG.md                            |  10 +
+ config/ocr.json                         |  13 ++
+ docs/ocr.md                             |  26 ++-
+ examples/owner-corrections.example.json |  22 +++
+ scripts/build_technical_export.py       |  91 ++++++++-
+ scripts/ocr_retry.py                    | 241 +++++++++++++++++++++++
+ scripts/owner_corrections.py            | 180 +++++++++++++++++
+ scripts/review_sheet.py                 | 162 ++++++++++++++++
+ tests/test_ocr_retry_review.py          | 244 ++++++++++++++++++++++++
+ 9 files changed, 987 insertions(+), 2 deletions(-)
+ create mode 100644 examples/owner-corrections.example.json
+ create mode 100644 scripts/ocr_retry.py
+ create mode 100644 scripts/owner_corrections.py
+ create mode 100644 scripts/review_sheet.py
+ create mode 100644 tests/test_ocr_retry_review.py
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1cbb29f..3492749 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,15 @@
+ # Changelog
+ 
++## Unreleased (local branch feat/ocr-retry-review)
++
++Automatic OCR retry for items held only for OCR quality: re-render the cropped image at about 3x (or raster a PDF page at 300-400 dpi when there is no image), enhance (grayscale, sharpen, contrast), and rerun both fidelity OCR passes. The same strict gate still applies. Settings live in `config/ocr.json` under `retry`. Each attempt is logged in `export/ocr-retry.json`.
++
++Every still-held item is written to `export/review-sheet.json`, `.md` and `.html`, with empty `owner_text` and `owner_decision` fields that are never auto-filled.
++
++A committed `review/owner-corrections.json` is read on the next run. Complete corrections (a filled `owner_decision` plus structured stem, and options or key when needed) are exported as `owner_checked` and still must pass schema and type rules.
++
++Tests: `tests/test_ocr_retry_review.py`.
++
+ ## 1.3.0 (2026-11-15)
+ 
+ Merges the site v2 technical path (OCR, export, fidelity gate) with the 1.2.0 writing brief, extract fixes, package guard and 1.2.1 operator docs that were already on `main`.
+diff --git a/config/ocr.json b/config/ocr.json
+index 421c355..def0aee 100644
+--- a/config/ocr.json
++++ b/config/ocr.json
+@@ -86,5 +86,18 @@
+         "preprocess": "threshold"
+       }
+     ]
++  },
++  "retry": {
++    "enabled": true,
++    "dpi": 350,
++    "scale": 3,
++    "grayscale": true,
++    "sharpen": true,
++    "contrast": 1.5,
++    "clahe": true,
++    "brightness": 0,
++    "binarize": false,
++    "prefer_pdf_raster": true,
++    "pdf_enhance_scale": 1
+   }
+ }
+diff --git a/docs/ocr.md b/docs/ocr.md
+index be2d914..2099eda 100644
+--- a/docs/ocr.md
++++ b/docs/ocr.md
+@@ -37,7 +37,7 @@ Prefer leaving the fidelity floors at 90 and 95. Safer changes:
+ - Raise `min_word_confidence` or `min_overall_confidence`.
+ - Keep `require_pass_agreement` true.
+ - Add a third pass only if you still require all passes to agree.
+-- Raise `dpi` or `scale` so the same thresholds see a sharper image (this is also a planned improvement: higher resolution page renders).
++- Raise `dpi` or `scale` so the same thresholds see a sharper image.
+ 
+ Less safe (will export unconfirmed text):
+ 
+@@ -46,3 +46,27 @@ Less safe (will export unconfirmed text):
+ - Treating a single pixel method as a key (that is a fidelity key setting, not an OCR fill setting)
+ 
+ Record a change in `CHANGELOG.md` and rerun the unit tests plus a real PDF before you trust a new threshold.
++
++## Retry block
++
++The `retry` object in `config/ocr.json` controls an automatic second OCR pass for items held only for OCR quality (low word or overall confidence, or disagreeing passes). Type and key holds are not retried.
++
++Default settings:
++
++- `enabled`: true
++- `dpi`: 350 (used when a PDF page is rasterised because the item has no cropped image)
++- `scale`: 3 (used on existing cropped question images)
++- `grayscale`, `sharpen`, `clahe`: true
++- `contrast`: 1.5
++- `binarize`: false (optional)
++- `prefer_pdf_raster`: true, but only when the item has no source images
++- `pdf_enhance_scale`: 1 (do not scale a high-dpi raster again)
++
++The retry writes enhanced images under `out/media/retry`, reruns both fidelity OCR passes, and exports the item only if the same strict gate passes (100 percent word coverage, passes agree, per-word 90, overall 95). Every attempt and outcome is written to `export/ocr-retry.json`.
++
++Items that are still held after the retry (and any other hold) are written to a review sheet: `export/review-sheet.json`, `export/review-sheet.md` and `export/review-sheet.html`. Each row has the image path, OCR text, PDF text, hold reason, and empty `owner_text` / `owner_decision` fields. Those fields are never auto-filled.
++
++Owner corrections live in `exams/CODE/review/owner-corrections.json` in raw-exam. The file is copied into the workspace `review/` folder on the next run. A row is applied only when `owner_decision` and a structured `stem` are both non-empty (plus options and `answer_raw` when the type needs them). A bare `owner_text` blob is not parsed. Corrected items are exported with the `owner_checked` tag and a short `answer.source` record (who, when, image sha256). A full record is also written to `export/owner-checked.json`. Schema and type rules still apply. OCR or coverage holds are skipped only for a complete owner correction, because that is the point of the owner review.
++
++See `examples/owner-corrections.example.json`.
++
+diff --git a/examples/owner-corrections.example.json b/examples/owner-corrections.example.json
+new file mode 100644
+index 0000000..cff8f2b
+--- /dev/null
++++ b/examples/owner-corrections.example.json
+@@ -0,0 +1,22 @@
++{
++  "schema_version": 1,
++  "exam_code": "EXAM-CODE",
++  "corrections": [
++    {
++      "question_key": "q003",
++      "owner_decision": "use_owner_text",
++      "owner_text": "",
++      "stem": "The corrected stem goes here.",
++      "options": {
++        "a": "First choice",
++        "b": "Second choice",
++        "c": "Third choice",
++        "d": "Fourth choice"
++      },
++      "answer_raw": "B",
++      "corrected_by": "",
++      "corrected_at": "",
++      "image_sha256": ""
++    }
++  ]
++}
+diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
+index f9d6a55..35bc783 100644
+--- a/scripts/build_technical_export.py
++++ b/scripts/build_technical_export.py
+@@ -11,6 +11,9 @@ and catalog.csv. Writes:
+   export/cannot-convert.json
+   export/fidelity.json
+   export/fidelity.md
++  export/ocr-retry.json
++  export/review-sheet.json, .md, .html
++  export/owner-checked.json
+   questions.json  (minimal technical bank for a later research pass)
+ 
+ Exam header comes from the catalog only. Explanation is omitted. Items with
+@@ -28,6 +31,10 @@ import qtypes
+ import export_question_v2 as E
+ import vision_util as V
+ import fidelity
++import ocr_extract as O
++import ocr_retry
++import owner_corrections as OC
++import review_sheet
+ 
+ DEFAULT_DOMAIN = 'Unassigned'
+ 
+@@ -354,7 +361,10 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
+         hold['fidelity'] = gate
+         if not gate['ok']:
+             hold['reason'] = gate['reason'] or hold['reason']
+-            return None, hold, result, gate
++            # Keep the built question so a later owner-correction path can
++            # export it after type and schema checks. The caller still treats
++            # a non-None hold as held unless it chooses otherwise.
++            return q, hold, result, gate
+         return q, None, result, gate
+ 
+     if q is None:
+@@ -386,12 +396,34 @@ def technical_question_record(item, typ, result, ocr_item, answer, held):
+     return rec
+ 
+ 
++
++def schema_errors_for_question(question, exam_code='EXAM'):
++    """Return schema or importer-rule errors for one site v2 question."""
++    try:
++        import validate_question_v2 as V2
++        schema = V2.load_schema()
++        registry = V2.load_registry()
++        allow = V2.load_allowlist()
++        exam = {
++            'vendor': 'Vendor',
++            'certification': exam_code,
++            'exam_code': exam_code,
++            'name': exam_code,
++            'question_count': 1,
++        }
++        doc = E.wrap_exam(exam, [question])
++        return V2.validate_doc(doc, schema, registry, allow)
++    except Exception as exc:
++        return [str(exc)]
++
++
+ def main(argv=None):
+     ap = argparse.ArgumentParser(description='Build a site v2 exam file from a PDF extract (no AI).')
+     ap.add_argument('--exam', required=True)
+     ap.add_argument('--out-dir', required=True, help='Exam output folder (out/CODE).')
+     ap.add_argument('--catalog', help='catalog.csv (defaults to workspace catalog.csv).')
+     ap.add_argument('--root', help='Workspace root.')
++    ap.add_argument('--corrections', help='Path to owner-corrections.json')
+     args = ap.parse_args(argv)
+     if args.root:
+         paths.set_root(args.root)
+@@ -419,6 +451,13 @@ def main(argv=None):
+         fid_cfg = None
+     deny = fidelity.make_deny(fid_cfg) if fid_cfg else None
+ 
++    corrections = OC.load_corrections(args.root, exam, args.corrections)
++    ocr_cfg = V.load_ocr_config() or {}
++    retry_cfg = ocr_retry.retry_config(ocr_cfg)
++    pdf = O.find_pdf(out)
++    retry_logs = []
++    owner_records = []
++
+     questions = []
+     held = []
+     bank_qs = []
+@@ -428,7 +467,50 @@ def main(argv=None):
+         item = split[key]
+         vis = visual.get(key)
+         ocr_item = ocr_items.get(key) or {}
++        correction = corrections.get(key)
++        owner_applied = False
++        if correction:
++            item = OC.apply_correction(item, correction)
++            split[key] = item
++            owner_applied = True
+         q, hold, result, gate = export_one(item, vis, ocr_item, exam, domain, min_conf, fid_cfg=fid_cfg, deny=deny)
++        if owner_applied:
++            rec = OC.build_record(item, correction, out)
++            if q is not None and (hold is None or OC.only_ocr_or_coverage_reasons(hold, gate)):
++                marked = OC.mark_question(q, rec)
++                errs = schema_errors_for_question(marked, exam)
++                if errs:
++                    owner_records.append(dict(rec, owner_checked=False,
++                                              rejected_reason='; '.join(errs)))
++                    if not hold:
++                        hold = {'question_key': key, 'reason': '; '.join(errs)}
++                    else:
++                        hold = dict(hold, reason=(hold.get('reason') or '') + '; schema: ' + '; '.join(errs))
++                else:
++                    q = marked
++                    hold = None
++                    owner_records.append(rec)
++            else:
++                owner_records.append(dict(rec, owner_checked=False,
++                                          rejected_reason=(hold or {}).get('reason') or 'type or schema failed'))
++        elif hold and ocr_retry.is_ocr_hold(hold, gate) and retry_cfg.get('enabled', True):
++            new_ocr, retry_log = ocr_retry.retry_item(item, ocr_item, out, pdf, ocr_cfg)
++            q2, hold2, result2, gate2 = export_one(item, vis, new_ocr, exam, domain, min_conf, fid_cfg=fid_cfg, deny=deny)
++            if hold2 is None and q2 is not None:
++                retry_log['outcome'] = 'recovered'
++                retry_log['gate_ok'] = True
++                q, hold, result, gate = q2, hold2, result2, gate2
++                ocr_item = new_ocr
++                ocr_items[key] = new_ocr
++            else:
++                retry_log['outcome'] = 'still_held'
++                retry_log['gate_ok'] = False
++                retry_log['after_reason'] = (hold2 or {}).get('reason') or ((gate2 or {}).get('reason') or '')
++                if gate2:
++                    gate = gate2
++                    hold = hold2 or hold
++                    result = result2 or result
++            retry_logs.append(retry_log)
+         fid_row = {
+             'question_key': key,
+             'status': 'exported' if q and not hold else 'held',
+@@ -443,6 +525,8 @@ def main(argv=None):
+             fid_row.update({k: gate.get(k) for k in (
+                 'missing_words', 'extra_words', 'ocr_overall_confidence',
+                 'ocr_agree', 'type_rules')})
++        if owner_applied and q and not hold:
++            fid_row['owner_checked'] = True
+         if hold:
+             if not fid_row['reason']:
+                 fid_row['reason'] = hold.get('reason') or ''
+@@ -507,6 +591,11 @@ def main(argv=None):
+         fh.write('\n')
+     if fid_cfg and fid_cfg.get('enabled', True):
+         fidelity.write_reports(out, exam, fid_rows)
++    if retry_logs:
++        ocr_retry.write_retry_log(out, retry_logs, exam=exam)
++    review_sheet.write_review_sheet(out, exam, split, held, ocr_items)
++    if owner_records:
++        OC.write_records(out, exam, owner_records)
+     print('technical export: %s detected=%s held=%s types=%s file=%s' % (
+         exam, len(questions), len(held), by_type, dest))
+     return 0
+diff --git a/scripts/ocr_retry.py b/scripts/ocr_retry.py
+new file mode 100644
+index 0000000..513bede
+--- /dev/null
++++ b/scripts/ocr_retry.py
+@@ -0,0 +1,241 @@
++#!/usr/bin/env python3
++"""Retry OCR only for items held for OCR reasons. No AI, no web.
++
++Re-renders the source image or PDF page at a higher resolution, enhances it
++(grayscale, sharpen, contrast, optional binarize), and reruns both fidelity
++OCR passes. The same strict fidelity gate still decides whether the item
++can be exported. Every attempt is logged.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import re
++
++import cv2
++import numpy as np
++
++import ocr_extract as O
++import vision_util as V
++
++OCR_REASON_HINTS = (
++    'ocr words below',
++    'ocr overall confidence',
++    'ocr passes disagree',
++    'ocr word confidence',
++    'ocr min word',
++)
++
++
++def retry_config(cfg=None):
++    cfg = cfg if isinstance(cfg, dict) else (V.load_ocr_config() or {})
++    retry = dict(cfg.get('retry') or {})
++    retry.setdefault('enabled', True)
++    retry.setdefault('dpi', 350)
++    retry.setdefault('scale', 3)
++    retry.setdefault('grayscale', True)
++    retry.setdefault('sharpen', True)
++    retry.setdefault('contrast', 1.5)
++    retry.setdefault('clahe', True)
++    retry.setdefault('brightness', 0)
++    retry.setdefault('binarize', False)
++    retry.setdefault('prefer_pdf_raster', True)
++    retry.setdefault('pdf_enhance_scale', 1)
++    return retry
++
++
++def is_ocr_hold(hold=None, gate=None) -> bool:
++    """True when the hold is about OCR quality, not type or key rules."""
++    parts = []
++    if isinstance(hold, dict):
++        parts.append(str(hold.get('reason') or ''))
++        fid = hold.get('fidelity') if isinstance(hold.get('fidelity'), dict) else {}
++        parts.append(str(fid.get('reason') or ''))
++        gate = gate or fid
++    if isinstance(gate, dict):
++        parts.append(str(gate.get('reason') or ''))
++        if gate.get('ocr_agree') is False:
++            return True
++        try:
++            if gate.get('ocr_min_word_confidence') is not None and float(gate['ocr_min_word_confidence']) < 90:
++                return True
++        except (TypeError, ValueError):
++            pass
++        try:
++            if gate.get('ocr_overall_confidence') is not None and float(gate['ocr_overall_confidence']) < 95:
++                return True
++        except (TypeError, ValueError):
++            pass
++    text = ' '.join(parts).lower()
++    return any(h in text for h in OCR_REASON_HINTS)
++
++
++def file_sha256(path: str) -> str | None:
++    if not path or not os.path.isfile(path):
++        return None
++    h = hashlib.sha256()
++    with open(path, 'rb') as fh:
++        for chunk in iter(lambda: fh.read(1024 * 1024), b''):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def enhance_image(src_path: str, dest_path: str, retry_cfg=None) -> str | None:
++    """Write an enhanced grayscale copy. Returns dest_path or None."""
++    retry_cfg = retry_cfg or {}
++    img = cv2.imread(src_path, cv2.IMREAD_COLOR)
++    if img is None:
++        img = cv2.imread(src_path, cv2.IMREAD_GRAYSCALE)
++        if img is None:
++            return None
++        if img.ndim == 2:
++            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
++    scale = float(retry_cfg.get('scale') or 3)
++    if scale and abs(scale - 1.0) > 0.01:
++        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if (retry_cfg.get('grayscale', True) or img.ndim == 3) else img
++    if gray.ndim == 3:
++        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
++    contrast = float(retry_cfg.get('contrast') or 1.5)
++    brightness = float(retry_cfg.get('brightness') or 0)
++    gray = cv2.convertScaleAbs(gray, alpha=contrast, beta=brightness)
++    if retry_cfg.get('clahe', True):
++        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
++        gray = clahe.apply(gray)
++    if retry_cfg.get('sharpen', True):
++        blur = cv2.GaussianBlur(gray, (0, 0), 1.0)
++        gray = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
++        gray = np.clip(gray, 0, 255).astype(np.uint8)
++    if retry_cfg.get('binarize'):
++        _, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
++    os.makedirs(os.path.dirname(dest_path) or '.', exist_ok=True)
++    if not cv2.imwrite(dest_path, gray):
++        return None
++    return dest_path
++
++
++def _safe_name(name: str) -> str:
++    base = os.path.basename(name or 'image')
++    return re.sub(r'[^A-Za-z0-9._-]+', '_', base) or 'image.png'
++
++
++def retry_item(item, ocr_item, out_dir, pdf, cfg=None):
++    """Rerun both OCR passes on enhanced images. Returns (new_ocr_item, log)."""
++    cfg = cfg if isinstance(cfg, dict) else (V.load_ocr_config() or {})
++    retry_cfg = retry_config(cfg)
++    key = (item or {}).get('question_key') or 'unknown'
++    media = os.path.join(out_dir, 'media', 'src')
++    dest_dir = os.path.join(out_dir, 'media', 'retry')
++    os.makedirs(dest_dir, exist_ok=True)
++    log = {
++        'question_key': key,
++        'attempted': True,
++        'source_images': [],
++        'retry_images': [],
++        'pdf_raster': [],
++        'outcome': 'still_held',
++        'notes': [],
++    }
++    sources = list((item or {}).get('question_images') or [])
++    sources += [fn for fn in (item or {}).get('answer_images') or [] if fn not in sources]
++    if not sources and retry_cfg.get('prefer_pdf_raster') and pdf and (item or {}).get('pages'):
++        for page in item.get('pages') or []:
++            fn = O.raster_page(pdf, dest_dir, page, retry_cfg.get('dpi') or 350,
++                               prefix='retry-raster-%s' % key)
++            if fn:
++                sources.append(fn)
++                log['pdf_raster'].append({'page': page, 'file': fn, 'dpi': retry_cfg.get('dpi')})
++    enhanced_names = []
++    used_paths = []
++    for fn in sources:
++        src = fn if os.path.isabs(fn) else os.path.join(media, fn)
++        if not os.path.isfile(src):
++            alt = os.path.join(dest_dir, os.path.basename(fn))
++            if os.path.isfile(alt):
++                src = alt
++            else:
++                log['notes'].append('missing image %s' % fn)
++                continue
++        log['source_images'].append(os.path.basename(fn))
++        # High-dpi rasters already in dest_dir should not be scaled again.
++        this_cfg = dict(retry_cfg)
++        if os.path.dirname(os.path.abspath(src)) == os.path.abspath(dest_dir):
++            this_cfg['scale'] = float(retry_cfg.get('pdf_enhance_scale') or 1)
++        dest_name = '%s-%s' % (key, _safe_name(fn))
++        dest = os.path.join(dest_dir, dest_name)
++        written = enhance_image(src, dest, this_cfg)
++        if not written:
++            log['notes'].append('enhance failed for %s' % fn)
++            continue
++        enhanced_names.append(dest_name)
++        used_paths.append(written)
++        log['retry_images'].append({
++            'file': dest_name,
++            'source': os.path.basename(fn),
++            'sha256': file_sha256(written),
++        })
++
++    if not used_paths:
++        log['attempted'] = True
++        log['outcome'] = 'no_retry_image'
++        log['notes'].append('no source image could be enhanced')
++        return ocr_item, log
++
++    # OCR the enhanced images using the same two fidelity passes.
++    images = []
++    confs = []
++    notes = list((ocr_item or {}).get('notes') or [])
++    notes.append('ocr retry on enhanced images')
++    for dest_name, dest_path in zip(enhanced_names, used_paths):
++        rec_img, _lines = O.ocr_image(dest_dir, dest_name, cfg, 'question-retry')
++        rec_img['retry'] = True
++        rec_img['source_file'] = dest_name
++        images.append(rec_img)
++        if rec_img.get('mean_confidence') is not None:
++            confs.append(rec_img['mean_confidence'])
++        if rec_img.get('notes'):
++            notes.extend(rec_img['notes'])
++    mean = round(sum(confs) / len(confs), 1) if confs else None
++    mins = [im.get('min_confidence') for im in images if im.get('min_confidence') is not None]
++    minc = min(mins) if mins else None
++    agree = all(im.get('agree', True) for im in images) if images else True
++    new_ocr = dict(ocr_item or {})
++    new_ocr.update({
++        'question_key': key,
++        'images': images,
++        'confidence': mean,
++        'min_confidence': minc,
++        'notes': notes,
++        'agree': agree,
++        'retry_applied': True,
++    })
++    log['after'] = {
++        'min_confidence': minc,
++        'overall_confidence': mean,
++        'agree': agree,
++        'image_count': len(images),
++    }
++    log['before'] = {
++        'min_confidence': (ocr_item or {}).get('min_confidence'),
++        'overall_confidence': (ocr_item or {}).get('confidence'),
++        'agree': (ocr_item or {}).get('agree'),
++    }
++    return new_ocr, log
++
++
++def write_retry_log(out_dir, rows, exam=None):
++    export_dir = os.path.join(out_dir, 'export')
++    os.makedirs(export_dir, exist_ok=True)
++    payload = {
++        'exam': exam,
++        'attempted': sum(1 for r in rows if r.get('attempted')),
++        'recovered': sum(1 for r in rows if r.get('outcome') == 'recovered'),
++        'still_held': sum(1 for r in rows if r.get('outcome') == 'still_held'),
++        'items': rows,
++    }
++    path = os.path.join(export_dir, 'ocr-retry.json')
++    with open(path, 'w', encoding='utf-8') as fh:
++        json.dump(payload, fh, indent=2, ensure_ascii=False)
++        fh.write('\n')
++    return path
+diff --git a/scripts/owner_corrections.py b/scripts/owner_corrections.py
+new file mode 100644
+index 0000000..fbf7f97
+--- /dev/null
++++ b/scripts/owner_corrections.py
+@@ -0,0 +1,180 @@
++#!/usr/bin/env python3
++"""Load committed owner corrections. Never auto-fill empty fields."""
++from __future__ import annotations
++
++import json
++import os
++from datetime import datetime, timezone
++
++from ocr_retry import file_sha256
++
++
++def _load(path):
++    if not path or not os.path.isfile(path):
++        return None
++    with open(path, encoding='utf-8') as fh:
++        return json.load(fh)
++
++
++def find_corrections_path(root, exam, explicit=None):
++    candidates = []
++    if explicit:
++        candidates.append(explicit)
++    if root:
++        candidates.extend([
++            os.path.join(root, 'review', 'owner-corrections.json'),
++            os.path.join(root, 'exams', exam or '', 'review', 'owner-corrections.json'),
++        ])
++    for path in candidates:
++        if path and os.path.isfile(path):
++            return path
++    return None
++
++
++def load_corrections(root, exam, explicit=None) -> dict:
++    """Return {question_key: correction_dict} for complete, non-empty corrections only."""
++    path = find_corrections_path(root, exam, explicit)
++    data = _load(path) if path else None
++    out = {}
++    if not isinstance(data, dict):
++        return out
++    rows = data.get('corrections') or data.get('items') or []
++    if not isinstance(rows, list):
++        return out
++    for row in rows:
++        if not isinstance(row, dict):
++            continue
++        key = row.get('question_key') or row.get('id')
++        if not key or not is_complete(row):
++            continue
++        rec = dict(row)
++        rec['_source_path'] = path
++        out[str(key)] = rec
++    return out
++
++
++def is_complete(row) -> bool:
++    """A correction is used only when the owner filled a decision and the learner text."""
++    if not isinstance(row, dict):
++        return False
++    decision = str(row.get('owner_decision') or '').strip()
++    stem = str(row.get('stem') or '').strip()
++    # Never treat an empty review-sheet row as a correction.
++    if not decision or not stem:
++        return False
++    return True
++
++
++def apply_correction(item, correction) -> dict:
++    """Return a copy of the item with owner-provided stem/options/key. Empty fields stay."""
++    out = dict(item or {})
++    stem = str(correction.get('stem') or '').strip()
++    if stem:
++        out['stem'] = stem
++        out.pop('image_only', None)
++    options = correction.get('options')
++    if isinstance(options, dict) and any(str(v or '').strip() for v in options.values()):
++        out['options'] = {str(k).lower(): v for k, v in options.items() if str(v or '').strip()}
++    answer_raw = str(correction.get('answer_raw') or correction.get('key') or '').strip()
++    if answer_raw:
++        out['answer_raw'] = answer_raw
++    out['_owner_correction'] = {
++        'question_key': correction.get('question_key'),
++        'owner_decision': correction.get('owner_decision'),
++        'corrected_by': correction.get('corrected_by') or '',
++        'corrected_at': correction.get('corrected_at') or '',
++        'image_sha256': correction.get('image_sha256') or '',
++        'source_path': correction.get('_source_path') or '',
++    }
++    return out
++
++
++def only_ocr_or_coverage_reasons(hold=None, gate=None) -> bool:
++    """True when a built question is held only for OCR quality or word coverage."""
++    texts = []
++    if isinstance(gate, dict) and gate.get('reason'):
++        texts.append(gate['reason'])
++    elif isinstance(hold, dict):
++        texts.append(str(hold.get('reason') or ''))
++        fid = hold.get('fidelity') if isinstance(hold.get('fidelity'), dict) else {}
++        texts.append(str(fid.get('reason') or ''))
++    blob = '; '.join(t for t in texts if t)
++    if not blob.strip():
++        return False
++    parts = [p.strip() for p in blob.split(';') if p.strip()]
++    allowed = (
++        'ocr words below',
++        'ocr overall confidence',
++        'ocr passes disagree',
++        'ocr word confidence',
++        'missing words:',
++        'extra words:',
++    )
++    if not parts:
++        return False
++    for part in parts:
++        low = part.lower()
++        if not any(low.startswith(a) or a in low for a in allowed):
++            return False
++    return True
++
++
++def image_sha_for_item(item, out_dir) -> str:
++    names = list((item or {}).get('question_images') or []) + list((item or {}).get('answer_images') or [])
++    shas = []
++    for name in names:
++        for folder in (os.path.join('media', 'src'), os.path.join('media', 'retry')):
++            path = os.path.join(out_dir, folder, os.path.basename(name))
++            digest = file_sha256(path)
++            if digest:
++                shas.append('%s:%s' % (os.path.basename(name), digest))
++                break
++    return '; '.join(shas)
++
++
++def build_record(item, correction, out_dir, now=None) -> dict:
++    now = now or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
++    provided_sha = str(correction.get('image_sha256') or '').strip()
++    computed = image_sha_for_item(item, out_dir)
++    return {
++        'question_key': item.get('question_key'),
++        'owner_checked': True,
++        'owner_decision': correction.get('owner_decision') or '',
++        'corrected_by': correction.get('corrected_by') or '',
++        'corrected_at': correction.get('corrected_at') or now,
++        'recorded_at': now,
++        'image_sha256': provided_sha or computed,
++        'computed_image_sha256': computed,
++    }
++
++
++def mark_question(question, record):
++    """Attach schema-safe owner_checked marks (tags + answer.source)."""
++    q = dict(question or {})
++    tags = list(q.get('tags') or [])
++    if 'owner_checked' not in tags:
++        tags.append('owner_checked')
++    q['tags'] = tags
++    answer = dict(q.get('answer') or {})
++    bits = ['owner_checked']
++    if record.get('corrected_by'):
++        bits.append('by=%s' % record['corrected_by'])
++    if record.get('corrected_at'):
++        bits.append('at=%s' % record['corrected_at'])
++    if record.get('image_sha256'):
++        bits.append('image_sha256=%s' % record['image_sha256'])
++    source = '; '.join(bits)
++    existing = str(answer.get('source') or '').strip()
++    answer['source'] = (existing + '; ' + source).strip('; ') if existing else source
++    q['answer'] = answer
++    return q
++
++
++def write_records(out_dir, exam, records):
++    export_dir = os.path.join(out_dir, 'export')
++    os.makedirs(export_dir, exist_ok=True)
++    path = os.path.join(export_dir, 'owner-checked.json')
++    with open(path, 'w', encoding='utf-8') as fh:
++        json.dump({'exam': exam, 'count': len(records), 'items': records}, fh, indent=2, ensure_ascii=False)
++        fh.write('\n')
++    return path
+diff --git a/scripts/review_sheet.py b/scripts/review_sheet.py
+new file mode 100644
+index 0000000..2913e3c
+--- /dev/null
++++ b/scripts/review_sheet.py
+@@ -0,0 +1,162 @@
++#!/usr/bin/env python3
++"""Write a review sheet for every item that is still held. No AI, no auto-fill."""
++from __future__ import annotations
++
++import html
++import json
++import os
++
++
++def _ocr_text(ocr_item) -> str:
++    if not isinstance(ocr_item, dict):
++        return ''
++    parts = []
++    for im in ocr_item.get('images') or []:
++        if not isinstance(im, dict):
++            continue
++        t = (im.get('text') or '').strip()
++        if t:
++            parts.append(t)
++    if not parts and (ocr_item.get('text') or '').strip():
++        parts.append(ocr_item['text'].strip())
++    return '\n'.join(parts)
++
++
++def _image_paths(item, ocr_item, out_dir) -> list[str]:
++    names = []
++    for rec in (item or {}).get('question_images') or []:
++        names.append(rec)
++    for rec in (item or {}).get('answer_images') or []:
++        if rec not in names:
++            names.append(rec)
++    for im in (ocr_item or {}).get('images') or []:
++        fn = (im or {}).get('file') if isinstance(im, dict) else None
++        if fn and fn not in names:
++            names.append(fn)
++    paths = []
++    for name in names:
++        rel = os.path.join('media', 'src', os.path.basename(name))
++        abs_path = os.path.join(out_dir, rel)
++        if not os.path.isfile(abs_path):
++            for folder in (os.path.join('media', 'retry'), os.path.join('media', 'src')):
++                cand = os.path.join(out_dir, folder, os.path.basename(name))
++                if os.path.isfile(cand):
++                    rel = os.path.join(folder, os.path.basename(name))
++                    break
++        paths.append(rel.replace('\\', '/'))
++    return paths
++
++
++def build_rows(exam, split, held, ocr_items, out_dir) -> list[dict]:
++    rows = []
++    for hold in held or []:
++        key = hold.get('question_key') if isinstance(hold, dict) else None
++        if not key:
++            continue
++        item = (split or {}).get(key) or {}
++        ocr_item = (ocr_items or {}).get(key) or {}
++        fid = hold.get('fidelity') if isinstance(hold.get('fidelity'), dict) else {}
++        reason = hold.get('reason') or fid.get('reason') or ''
++        rows.append({
++            'exam_code': exam,
++            'question_key': key,
++            'image_paths': _image_paths(item, ocr_item, out_dir),
++            'ocr_text': _ocr_text(ocr_item),
++            'pdf_text': item.get('source_text') or '',
++            'hold_reason': reason,
++            'owner_text': '',
++            'owner_decision': '',
++        })
++    return rows
++
++
++def _write_markdown(exam, rows) -> str:
++    lines = [
++        '# Review sheet: %s' % exam,
++        '',
++        'Held items that still need an owner decision. owner_text and owner_decision are left empty.',
++        'Copy a row into exams/%s/review/owner-corrections.json to apply a correction on the next run.' % exam,
++        '',
++        'Held: %s' % len(rows),
++        '',
++    ]
++    for row in rows:
++        lines.extend([
++            '## %s' % row['question_key'],
++            '',
++            '- Images: %s' % (', '.join(row['image_paths']) or '(none)'),
++            '- Hold reason: %s' % (row['hold_reason'] or '(none)'),
++            '- owner_text:',
++            '- owner_decision:',
++            '',
++            '### PDF text',
++            '',
++            '```',
++            row['pdf_text'] or '',
++            '```',
++            '',
++            '### OCR text',
++            '',
++            '```',
++            row['ocr_text'] or '',
++            '```',
++            '',
++        ])
++    return '\n'.join(lines) + '\n'
++
++
++def _write_html(exam, rows) -> str:
++    parts = [
++        '<!DOCTYPE html>',
++        '<html lang="en"><head><meta charset="utf-8">',
++        '<title>Review sheet: %s</title>' % html.escape(exam or ''),
++        '<style>body{font-family:sans-serif;max-width:900px;margin:1rem auto;line-height:1.4}'
++        'pre{white-space:pre-wrap;background:#f6f6f6;padding:0.75rem}'
++        'h2{margin-top:2rem}</style></head><body>',
++        '<h1>Review sheet: %s</h1>' % html.escape(exam or ''),
++        '<p>Held items that still need an owner decision. '
++        '<code>owner_text</code> and <code>owner_decision</code> are left empty. '
++        'Copy a row into <code>exams/%s/review/owner-corrections.json</code> '
++        'to apply a correction on the next run.</p>' % html.escape(exam or ''),
++        '<p>Held: %s</p>' % len(rows),
++    ]
++    for row in rows:
++        parts.append('<h2>%s</h2>' % html.escape(row['question_key']))
++        parts.append('<ul>')
++        parts.append('<li>Images: %s</li>' % html.escape(', '.join(row['image_paths']) or '(none)'))
++        parts.append('<li>Hold reason: %s</li>' % html.escape(row['hold_reason'] or '(none)'))
++        parts.append('<li>owner_text:</li>')
++        parts.append('<li>owner_decision:</li>')
++        parts.append('</ul>')
++        parts.append('<h3>PDF text</h3><pre>%s</pre>' % html.escape(row['pdf_text'] or ''))
++        parts.append('<h3>OCR text</h3><pre>%s</pre>' % html.escape(row['ocr_text'] or ''))
++    parts.append('</body></html>\n')
++    return '\n'.join(parts)
++
++
++def write_review_sheet(out_dir, exam, split, held, ocr_items) -> dict:
++    export_dir = os.path.join(out_dir, 'export')
++    os.makedirs(export_dir, exist_ok=True)
++    rows = build_rows(exam, split, held, ocr_items, out_dir)
++    payload = {
++        'schema_version': 1,
++        'exam_code': exam,
++        'held_count': len(rows),
++        'items': rows,
++        'note': 'owner_text and owner_decision are left empty. Do not auto-fill them.',
++    }
++    paths = {}
++    jp = os.path.join(export_dir, 'review-sheet.json')
++    with open(jp, 'w', encoding='utf-8') as fh:
++        json.dump(payload, fh, indent=2, ensure_ascii=False)
++        fh.write('\n')
++    paths['json'] = jp
++    mp = os.path.join(export_dir, 'review-sheet.md')
++    with open(mp, 'w', encoding='utf-8') as fh:
++        fh.write(_write_markdown(exam, rows))
++    paths['markdown'] = mp
++    hp = os.path.join(export_dir, 'review-sheet.html')
++    with open(hp, 'w', encoding='utf-8') as fh:
++        fh.write(_write_html(exam, rows))
++    paths['html'] = hp
++    return {'held_count': len(rows), 'paths': paths}
+diff --git a/tests/test_ocr_retry_review.py b/tests/test_ocr_retry_review.py
+new file mode 100644
+index 0000000..020dff1
+--- /dev/null
++++ b/tests/test_ocr_retry_review.py
+@@ -0,0 +1,244 @@
++#!/usr/bin/env python3
++"""OCR retry, review sheet, and owner corrections. No AI, no web."""
++from __future__ import annotations
++
++import json
++import os
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++SKILL = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(SKILL / 'scripts'))
++
++import ocr_retry
++import owner_corrections as OC
++import review_sheet
++
++
++def _write_gray(path, w=80, h=40, text=True):
++    img = np.full((h, w), 240, dtype=np.uint8)
++    if text:
++        cv2.putText(img, 'AB', (8, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2, cv2.LINE_AA)
++    cv2.imwrite(str(path), img)
++
++
++class OcrHoldTests(unittest.TestCase):
++    def test_detects_ocr_reasons_only(self):
++        self.assertTrue(ocr_retry.is_ocr_hold(
++            {'reason': 'OCR words below 90: foo (12.0); OCR overall confidence 70.0 is below 95'}))
++        self.assertTrue(ocr_retry.is_ocr_hold(
++            {'reason': 'extra words: x', 'fidelity': {'ocr_agree': False, 'reason': 'OCR passes disagree on: item'}}))
++        self.assertTrue(ocr_retry.is_ocr_hold(None, {'ocr_overall_confidence': 69.6, 'reason': 'OCR overall confidence 69.6 is below 95'}))
++        self.assertFalse(ocr_retry.is_ocr_hold({'reason': 'stem asks for 2 choices but the key has 1'}))
++        self.assertFalse(ocr_retry.is_ocr_hold({'reason': 'no type rule matched'}))
++
++
++class EnhanceTests(unittest.TestCase):
++    def test_enhance_writes_larger_grayscale(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            src = Path(tmp) / 'src.png'
++            dest = Path(tmp) / 'out.png'
++            _write_gray(src, 40, 20)
++            written = ocr_retry.enhance_image(str(src), str(dest), {
++                'scale': 3, 'grayscale': True, 'sharpen': True, 'contrast': 1.5,
++                'clahe': True, 'binarize': False, 'brightness': 0,
++            })
++            self.assertEqual(written, str(dest))
++            img = cv2.imread(str(dest), cv2.IMREAD_UNCHANGED)
++            self.assertIsNotNone(img)
++            self.assertEqual(len(img.shape), 2)
++            self.assertGreaterEqual(img.shape[1], 100)
++            self.assertGreaterEqual(img.shape[0], 50)
++
++
++class ReviewSheetTests(unittest.TestCase):
++    def test_writes_json_md_html_with_empty_owner_fields(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            split = {'q003': {'question_key': 'q003', 'source_text': 'PDF TEXT', 'question_images': ['p-1.png']}}
++            held = [{'question_key': 'q003', 'reason': 'OCR overall confidence 70 is below 95'}]
++            ocr = {'q003': {'images': [{'text': 'OCR TEXT', 'file': 'p-1.png'}]}}
++            result = review_sheet.write_review_sheet(tmp, 'DEMO', split, held, ocr)
++            self.assertEqual(result['held_count'], 1)
++            data = json.loads((Path(tmp) / 'export' / 'review-sheet.json').read_text())
++            row = data['items'][0]
++            self.assertEqual(row['question_key'], 'q003')
++            self.assertEqual(row['pdf_text'], 'PDF TEXT')
++            self.assertEqual(row['ocr_text'], 'OCR TEXT')
++            self.assertEqual(row['hold_reason'], 'OCR overall confidence 70 is below 95')
++            self.assertEqual(row['owner_text'], '')
++            self.assertEqual(row['owner_decision'], '')
++            md = (Path(tmp) / 'export' / 'review-sheet.md').read_text()
++            html = (Path(tmp) / 'export' / 'review-sheet.html').read_text()
++            self.assertIn('q003', md)
++            self.assertIn('owner_text', md)
++            self.assertIn('q003', html)
++
++
++class OwnerCorrectionTests(unittest.TestCase):
++    def test_empty_review_row_is_not_applied(self):
++        self.assertFalse(OC.is_complete({'question_key': 'q003', 'owner_text': '', 'owner_decision': ''}))
++        self.assertFalse(OC.is_complete({'question_key': 'q003', 'stem': 'A stem', 'owner_decision': ''}))
++        self.assertFalse(OC.is_complete({'question_key': 'q003', 'owner_decision': 'use_owner_text', 'stem': ''}))
++        self.assertTrue(OC.is_complete({
++            'question_key': 'q003', 'owner_decision': 'use_owner_text', 'stem': 'Corrected stem',
++        }))
++
++    def test_load_ignores_incomplete_rows(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            path = Path(tmp) / 'review' / 'owner-corrections.json'
++            path.parent.mkdir()
++            path.write_text(json.dumps({
++                'schema_version': 1,
++                'exam_code': 'DEMO',
++                'corrections': [
++                    {'question_key': 'q001', 'owner_decision': '', 'stem': ''},
++                    {'question_key': 'q002', 'owner_decision': 'use_owner_text',
++                     'stem': 'Fixed stem', 'options': {'a': 'One', 'b': 'Two'},
++                     'answer_raw': 'A', 'corrected_by': 'Owner', 'corrected_at': '2026-11-21T12:00:00Z'},
++                ],
++            }), encoding='utf-8')
++            loaded = OC.load_corrections(tmp, 'DEMO')
++            self.assertNotIn('q001', loaded)
++            self.assertIn('q002', loaded)
++
++    def test_apply_and_mark_keeps_schema_safe_fields(self):
++        item = {'question_key': 'q002', 'stem': 'Old', 'options': {'a': 'x'}, 'answer_raw': 'B'}
++        corr = {
++            'question_key': 'q002', 'owner_decision': 'use_owner_text',
++            'stem': 'Fixed stem', 'options': {'a': 'One', 'b': 'Two'},
++            'answer_raw': 'A', 'corrected_by': 'Owner', 'corrected_at': '2026-11-21T12:00:00Z',
++        }
++        out = OC.apply_correction(item, corr)
++        self.assertEqual(out['stem'], 'Fixed stem')
++        self.assertEqual(out['options']['a'], 'One')
++        self.assertEqual(out['answer_raw'], 'A')
++        rec = OC.build_record(out, corr, '/tmp', now='2026-11-21T12:00:00Z')
++        q = OC.mark_question({
++            'question_key': 'q002', 'version': 1, 'type': 'single_choice',
++            'domain': 'Unassigned', 'learner': {'stem': 'Fixed stem'},
++            'answer': {'answer_key': {'choice_ids': ['a']}, 'status': 'owner_key',
++                       'scoring_excluded': False, 'reviewer_needed': False},
++        }, rec)
++        self.assertIn('owner_checked', q['tags'])
++        self.assertIn('owner_checked', q['answer']['source'])
++        self.assertIn('by=Owner', q['answer']['source'])
++
++    def test_only_ocr_or_coverage_reasons(self):
++        self.assertTrue(OC.only_ocr_or_coverage_reasons(
++            {'reason': 'OCR overall confidence 70 is below 95; extra words: foo'}))
++        self.assertFalse(OC.only_ocr_or_coverage_reasons(
++            {'reason': 'stem asks for 2 choices but the key has 1'}))
++        self.assertFalse(OC.only_ocr_or_coverage_reasons(
++            {'reason': 'OCR words below 90: x; no type rule matched'}))
++
++
++class ExportRetryHookTests(unittest.TestCase):
++    def test_retry_log_and_review_sheet_from_export_loop(self):
++        # Functional check that a still-held OCR item is retried when possible
++        # and always lands on the review sheet. Uses a missing image so retry
++        # logs no_retry_image, which is deterministic without Tesseract text.
++        with tempfile.TemporaryDirectory() as tmp:
++            out = Path(tmp)
++            (out / 'extracted').mkdir()
++            (out / 'media' / 'src').mkdir(parents=True)
++            item = {
++                'question_key': 'q001', 'source_number': 1,
++                'stem': 'What is two plus two?',
++                'options': {'a': '3', 'b': '4', 'c': '5', 'd': '6'},
++                'answer_raw': 'B',
++                'source_text': 'What is two plus two?\nA. 3\nB. 4\nC. 5\nD. 6',
++                'question_images': ['missing.png'],
++                'pages': [1],
++            }
++            (out / 'extracted' / 'split.json').write_text(json.dumps({'q001': item}), encoding='utf-8')
++            (out / 'extracted' / 'ocr.json').write_text(json.dumps({
++                'items': {'q001': {
++                    'question_key': 'q001',
++                    'confidence': 40.0,
++                    'min_confidence': 20.0,
++                    'agree': False,
++                    'images': [{'file': 'missing.png', 'text': 'blur', 'mean_confidence': 40.0,
++                                'min_confidence': 20.0, 'agree': False, 'words': [
++                                    {'text': 'blur', 'conf': 20.0}
++                                ]}],
++                    'notes': ['OCR passes disagree'],
++                }}
++            }), encoding='utf-8')
++            (out / 'catalog.csv').write_text('exam_code,vendor,name\nDEMO,demo,Demo\n', encoding='utf-8')
++            # Isolate config? The export loads repo fidelity/ocr. That is fine.
++            import build_technical_export as B
++            rc = B.main(['--exam', 'DEMO', '--out-dir', str(out), '--catalog', str(out / 'catalog.csv')])
++            self.assertEqual(rc, 0)
++            retry = json.loads((out / 'export' / 'ocr-retry.json').read_text())
++            self.assertGreaterEqual(retry['attempted'], 1)
++            self.assertEqual(retry['items'][0]['question_key'], 'q001')
++            sheet = json.loads((out / 'export' / 'review-sheet.json').read_text())
++            # The item may still be held (missing image, low OCR). Sheet must exist.
++            self.assertTrue((out / 'export' / 'review-sheet.md').is_file())
++            self.assertTrue((out / 'export' / 'review-sheet.html').is_file())
++            self.assertEqual(sheet['exam_code'], 'DEMO')
++
++
++
++    def test_complete_owner_correction_exports_and_skips_ocr_hold(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            out = Path(tmp)
++            (out / 'extracted').mkdir()
++            (out / 'media' / 'src').mkdir(parents=True)
++            (out / 'review').mkdir()
++            item = {
++                'question_key': 'q003', 'source_number': 3,
++                'stem': 'Old blurry stem',
++                'options': {'a': '3', 'b': '4', 'c': '5', 'd': '6'},
++                'answer_raw': 'B',
++                'source_text': 'Old blurry stem\nA. 3\nB. 4\nC. 5\nD. 6',
++                'question_images': ['missing.png'],
++            }
++            (out / 'extracted' / 'split.json').write_text(json.dumps({'q003': item}), encoding='utf-8')
++            (out / 'extracted' / 'ocr.json').write_text(json.dumps({
++                'items': {'q003': {
++                    'question_key': 'q003', 'confidence': 40.0, 'min_confidence': 20.0,
++                    'agree': False, 'images': [{'file': 'missing.png', 'text': 'blur',
++                                                'mean_confidence': 40.0, 'min_confidence': 20.0,
++                                                'agree': False, 'words': [{'text': 'blur', 'conf': 20.0}]}],
++                }}
++            }), encoding='utf-8')
++            (out / 'catalog.csv').write_text('exam_code,vendor,name\nDEMO,demo,Demo\n', encoding='utf-8')
++            corr = {
++                'schema_version': 1, 'exam_code': 'DEMO',
++                'corrections': [{
++                    'question_key': 'q003',
++                    'owner_decision': 'use_owner_text',
++                    'stem': 'What is two plus two?',
++                    'options': {'a': '3', 'b': '4', 'c': '5', 'd': '6'},
++                    'answer_raw': 'B',
++                    'corrected_by': 'Owner',
++                    'corrected_at': '2026-11-21T12:00:00Z',
++                }],
++            }
++            cpath = out / 'review' / 'owner-corrections.json'
++            cpath.write_text(json.dumps(corr), encoding='utf-8')
++            import build_technical_export as B
++            rc = B.main(['--exam', 'DEMO', '--out-dir', str(out), '--catalog', str(out / 'catalog.csv'),
++                         '--corrections', str(cpath)])
++            self.assertEqual(rc, 0)
++            site = json.loads((out / 'DEMO.site-format.v2.json').read_text())
++            self.assertEqual(len(site['questions']), 1)
++            q = site['questions'][0]
++            self.assertIn('owner_checked', q['tags'])
++            self.assertIn('owner_checked', q['answer']['source'])
++            self.assertIn('What is two plus two?', json.dumps(q['learner']))
++            records = json.loads((out / 'export' / 'owner-checked.json').read_text())
++            self.assertEqual(records['count'], 1)
++            self.assertTrue(records['items'][0]['owner_checked'])
++            cannot = json.loads((out / 'export' / 'cannot-convert.json').read_text())
++            self.assertEqual(cannot, [])
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.47.3
+

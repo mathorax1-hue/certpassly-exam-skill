@@ -38,6 +38,33 @@ class PrepareWorkspaceTests(unittest.TestCase):
             self.assertIn("brand: CertPassly", yaml_text)
             self.assertIn("disclaimer:", yaml_text)
 
+    def test_copies_review_corrections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw" / "SYN-100"
+            (raw / "source").mkdir(parents=True)
+            (raw / "review").mkdir()
+            blob = b"%PDF-1.4 synthetic fixture " + (b"x" * 500)
+            pdf = raw / "source" / "SYN-100.pdf"
+            pdf.write_bytes(blob)
+            digest = hashlib.sha256(blob).hexdigest()
+            (raw / "manifest.json").write_text(json.dumps({
+                "exam_code": "SYN-100",
+                "vendor_slug": "example",
+                "owner_rights_statement": "The owner affirmed permission to use the supplied PDFs on 2026-11-11.",
+                "pdf_files": [{"name": "SYN-100.pdf", "sha256": digest, "bytes": len(blob)}],
+            }), encoding="utf-8")
+            (raw / "review" / "owner-corrections.json").write_text(json.dumps({
+                "schema_version": 1,
+                "exam_code": "SYN-100",
+                "corrections": [],
+            }), encoding="utf-8")
+            ws = Path(tmp) / "ws"
+            report = tool.prepare(raw, ws, "SYN-100", None)
+            self.assertEqual(report["review_files"], ["owner-corrections.json"])
+            dest = ws / "review" / "owner-corrections.json"
+            self.assertTrue(dest.is_file())
+            self.assertEqual(json.loads(dest.read_text())["corrections"], [])
+
     def test_rejects_git_lfs_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw = Path(tmp) / "raw" / "SYN-100"

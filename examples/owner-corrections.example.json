@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "exam_code": "EXAM-CODE",
+  "corrections": [
+    {
+      "question_key": "q003",
+      "owner_decision": "use_owner_text",
+      "owner_text": "",
+      "stem": "The corrected stem goes here.",
+      "options": {
+        "a": "First choice",
+        "b": "Second choice",
+        "c": "Third choice",
+        "d": "Fourth choice"
+      },
+      "answer_raw": "B",
+      "corrected_by": "",
+      "corrected_at": "",
+      "image_sha256": ""
+    }
+  ]
+}

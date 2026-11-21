@@ -22,6 +22,10 @@ certpassly-pipeline --exam CODE --root /path/work --offline
 
 Stages: intake, extract (local Tesseract OCR), export (site v2 plus the fidelity gate), validate_site, package. A question is exported only when word coverage is complete, two OCR passes agree, exactly one type rule matches, and the key comes from the PDF. Held items stay in `export/cannot-convert.json` and `export/fidelity.json`.
 
+Items held only for OCR quality get one automatic retry: the cropped image is enhanced at about 3x (or a PDF page is rasterised at 350 dpi when there is no image), then both OCR passes run again. The item is exported only if the same strict fidelity gate passes. Each attempt is logged in `export/ocr-retry.json`. Every item that is still held is written to `export/review-sheet.json`, `.md` and `.html`, with the image path, OCR text, PDF text, hold reason, and empty `owner_text` / `owner_decision` fields. Those fields are never auto-filled.
+
+Owner corrections are committed at `exams/CODE/review/owner-corrections.json` in raw-exam and are copied into the workspace `review/` folder. A row is applied only when `owner_decision` and a structured stem are both filled. Corrected items are exported as `owner_checked` and must still pass schema and type rules.
+
 ## Phase 2: research worklist (AI is a hook)
 
 ```
@@ -57,4 +61,9 @@ Stdout is a counts summary only.
 
 ## Upstream patch applied in Actions
 
-The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies `patches/upstream/v1.3.0-lead-ligature-complete-words.patch`. That patch stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`. The fidelity coverage gate stays strict. The same patch is bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.
+The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies every `patches/upstream/v1.3.0-*.patch` in name order:
+
+1. `v1.3.0-lead-ligature-complete-words.patch` stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`.
+2. `v1.3.0-ocr-retry-review-sheet.patch` adds the OCR retry pass, the review sheet, and owner-corrections support.
+
+The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.

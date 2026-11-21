@@ -135,7 +135,16 @@ def prepare(raw_dir: Path, workspace: Path, exam: str, links: Path | None, pipel
     else:
         dest_yaml.write_text(text.rstrip() + "\n" + line, encoding="utf-8")
 
-    return {"exam_code": exam, "files": copied, "catalog": str(catalog), "workspace": str(workspace)}
+    review_files = []
+    review_src = raw_dir / "review"
+    if review_src.is_dir():
+        dest_review = workspace / "review"
+        dest_review.mkdir(parents=True, exist_ok=True)
+        for src in sorted(review_src.glob("*.json")):
+            shutil.copy2(src, dest_review / src.name)
+            review_files.append(src.name)
+
+    return {"exam_code": exam, "files": copied, "catalog": str(catalog), "workspace": str(workspace), "review_files": review_files}
 
 
 def main(argv: list[str] | None = None) -> int:
