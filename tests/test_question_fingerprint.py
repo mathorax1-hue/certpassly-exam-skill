@@ -100,8 +100,9 @@ class DiffTests(unittest.TestCase):
         ]
         result = Q.diff_items(previous, incoming)
         new_rows = [r for r in result["items"] if r["status"] == "new"]
-        self.assertEqual(new_rows[0]["question_id"], "q004")
+        self.assertEqual(new_rows[0]["question_id"], "q010")
         self.assertTrue(any(r["question_id"] == "q003" and r["status"] == "retired" for r in result["items"]))
+        self.assertNotEqual(new_rows[0]["question_id"], "q003")
 
     def test_duplicate_fingerprint_kept_once(self):
         item = Q.item_from_site_question(site_question("q001", STEM_A, [CHOICE_1, CHOICE_2], [0]))
@@ -159,6 +160,123 @@ class ProcessRunTests(unittest.TestCase):
         self.assertEqual(statuses["q002"], "changed")
         self.assertEqual(statuses["q003"], "retired")
         self.assertEqual(statuses["q004"], "new")
+
+
+
+class IdentityStabilityTests(unittest.TestCase):
+    def test_letter_answer_matches_zero_based_index(self):
+        letter = Q.fingerprint_payload(STEM_A, [CHOICE_1, CHOICE_2], Q.normalize_answer("A"))
+        index = Q.fingerprint_payload(STEM_A, [CHOICE_1, CHOICE_2], Q.normalize_answer([0]))
+        self.assertEqual(Q.fingerprints_from_payload(letter)[0], Q.fingerprints_from_payload(index)[0])
+        self.assertEqual(Q.canonical_answer_token("D"), "3")
+        self.assertEqual(Q.canonical_answer_token("d"), "3")
+
+    def test_empty_index_keeps_incoming_ids_including_held_gap(self):
+        # Site keys skip q002 (held). If the held extracted item is loaded last,
+        # its incoming ID must stay q002, not be appended as q003.
+        incoming = [
+            Q.item_from_site_question(site_question("q001", STEM_A, [CHOICE_1, CHOICE_2], [0])),
+            Q.item_from_site_question(site_question("q003", STEM_C, [CHOICE_1, CHOICE_2], [0])),
+        ]
+        held = Q.item_from_site_question(site_question("q002", STEM_B, [CHOICE_1, CHOICE_2], [1]))
+        held["export_status"] = "held"
+        incoming[0]["export_status"] = "exported"
+        incoming[1]["export_status"] = "exported"
+        incoming.append(held)
+        result = Q.diff_items([], incoming)
+        by_in = {r["incoming_id"]: r for r in result["items"]}
+        self.assertEqual(by_in["q001"]["question_id"], "q001")
+        self.assertEqual(by_in["q002"]["question_id"], "q002")
+        self.assertEqual(by_in["q003"]["question_id"], "q003")
+        self.assertEqual(by_in["q002"]["export_status"], "held")
+        self.assertEqual(result["counts"]["new"], 3)
+        self.assertEqual(result["counts"]["retired"], 0)
+
+    def test_held_to_exported_same_content_is_same(self):
+        prev = Q.item_from_site_question(site_question("q048", STEM_A, [CHOICE_1, CHOICE_2], ["A"]))
+        prev["export_status"] = "held"
+        incoming = Q.item_from_site_question(site_question("q048", STEM_A, [CHOICE_1, CHOICE_2], [0]))
+        incoming["export_status"] = "exported"
+        result = Q.diff_items([prev], [incoming])
+        self.assertEqual(result["counts"]["same"], 1)
+        self.assertEqual(result["counts"]["changed"], 0)
+        self.assertEqual(result["counts"]["new"], 0)
+        self.assertEqual(result["counts"]["retired"], 0)
+        self.assertEqual(result["counts"]["export_status_changed"], 1)
+        row = result["items"][0]
+        self.assertEqual(row["question_id"], "q048")
+        self.assertEqual(row["status"], "same")
+        self.assertEqual(row["export_status"], "exported")
+        self.assertEqual(row["previous_export_status"], "held")
+
+    def test_extracted_loader_ignores_site_stem_and_remapped_key(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run = Path(tmp.name)
+        # Extracted PDF content for q048. The JSON key was wrongly remapped to q080.
+        extracted = run / "extracted" / "items"
+        extracted.mkdir(parents=True)
+        (extracted / "q048.json").write_text(json.dumps({
+            "question_key": "q080",
+            "stem": STEM_A,
+            "options": {"a": CHOICE_1, "b": CHOICE_2},
+            "answer_raw": "A",
+        }), encoding="utf-8")
+        # Site export has a type-builder stem and numeric answer for a different wrapping.
+        site = {
+            "questions": [
+                site_question("q048", "TEST-UPDATE-B scenario wrapper only", [CHOICE_1, CHOICE_2], [0], "scenario_standalone"),
+            ]
+        }
+        (run / "TEST-UPDATE-B.site-format.v2.json").write_text(json.dumps(site), encoding="utf-8")
+        (run / "export").mkdir(parents=True)
+        (run / "export" / "cannot-convert.json").write_text("[]", encoding="utf-8")
+        items = Q.load_items_from_run(run, "TEST-UPDATE-B")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["question_id"], "q048")
+        self.assertEqual(items[0]["export_status"], "exported")
+        # Identity comes from the extracted stem, not the site wrapper.
+        extracted_item = Q.item_from_extracted({
+            "question_key": "q048",
+            "stem": STEM_A,
+            "options": {"a": CHOICE_1, "b": CHOICE_2},
+            "answer_raw": "A",
+        })
+        self.assertEqual(items[0]["fingerprint"], extracted_item["fingerprint"])
+        self.assertNotEqual(items[0]["stem_fingerprint"], Q.item_from_site_question(site["questions"][0])["stem_fingerprint"])
+
+
+    def test_export_status_prefers_file_stem_over_remapped_held_key(self):
+        # After a bad remap, file q048.json may contain question_key q080 while
+        # cannot-convert lists q080. The file stem is the identity.
+        held = {"q080"}
+        site = {"q001", "q048"}
+        self.assertEqual(Q.export_status_for("q048", "q080", held, site), "exported")
+        self.assertEqual(Q.export_status_for("q080", "q079", held, site), "held")
+        self.assertEqual(Q.export_status_for("q263", "q262", set(), {"q262", "q264"}), "exported")
+
+    def test_site_type_change_does_not_retire_when_extracted_matches(self):
+        prev = Q.item_from_extracted({
+            "question_key": "q264",
+            "stem": STEM_D,
+            "options": {"a": CHOICE_1, "b": CHOICE_2, "c": CHOICE_3, "d": CHOICE_2B},
+            "answer_raw": "A",
+        })
+        prev["export_status"] = "exported"
+        incoming = Q.item_from_extracted({
+            "question_key": "q264",
+            "stem": STEM_D,
+            "options": {"a": CHOICE_1, "b": CHOICE_2, "c": CHOICE_3, "d": CHOICE_2B},
+            "answer_raw": "A",
+            "type": "scenario_standalone",
+        })
+        incoming["export_status"] = "exported"
+        result = Q.diff_items([prev], [incoming])
+        self.assertEqual(result["counts"]["same"], 1)
+        self.assertEqual(result["counts"]["new"], 0)
+        self.assertEqual(result["counts"]["retired"], 0)
+        self.assertEqual(result["items"][0]["question_id"], "q264")
+
 
 
 if __name__ == "__main__":

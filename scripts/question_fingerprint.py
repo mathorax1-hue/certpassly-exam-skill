@@ -63,8 +63,20 @@ def normalize_answer(answer) -> list[str]:
             return normalize_answer(answer.get("key"))
         return [normalize_text(_plain(answer))]
     if isinstance(answer, (list, tuple)):
-        return [normalize_text(_plain(x)) for x in answer]
-    return [normalize_text(_plain(answer))]
+        return [canonical_answer_token(x) for x in answer]
+    return [canonical_answer_token(answer)]
+
+
+def canonical_answer_token(value) -> str:
+    """Map a letter key (A/b) to a 0-based index string; leave other values normalized.
+
+    Site exports use numeric answer_key lists. Extracted items use A/B/C/D.
+    Identity must treat those as the same selection.
+    """
+    s = normalize_text(_plain(value))
+    if len(s) == 1 and "a" <= s <= "z":
+        return str(ord(s) - ord("a"))
+    return s
 
 
 def _choices_from_learner(learner: dict) -> list[str]:
@@ -79,7 +91,7 @@ def fingerprint_payload(stem: str, choices: list[str], answer: list[str], qtype:
     return {
         "stem": normalize_text(stem),
         "choices": [normalize_text(c) for c in (choices or [])],
-        "answer": [normalize_text(a) for a in (answer or [])],
+        "answer": [canonical_answer_token(a) for a in (answer or [])],
     }
 
 
@@ -116,10 +128,10 @@ def item_from_site_question(q: dict) -> dict | None:
     }
 
 
-def item_from_extracted(data: dict) -> dict | None:
+def item_from_extracted(data: dict, question_id: str | None = None) -> dict | None:
     if not isinstance(data, dict):
         return None
-    key = str(data.get("question_key") or data.get("id") or "").strip()
+    key = str(question_id or data.get("question_key") or data.get("id") or "").strip()
     if not key:
         return None
     opts = data.get("options") or {}
@@ -140,32 +152,97 @@ def item_from_extracted(data: dict) -> dict | None:
         "stem_fingerprint": stem_fp,
         "type": str(data.get("type") or ""),
         "origin": "extracted",
+        "key_in_file": str(data.get("question_key") or data.get("id") or "").strip(),
     }
 
 
+def load_json_file(path: Path):
+    if not path or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def load_held_keys(run_dir: Path) -> set[str]:
+    data = load_json_file(Path(run_dir) / "export" / "cannot-convert.json")
+    keys: set[str] = set()
+    rows = data if isinstance(data, list) else (data.get("items") or data.get("held") or []) if isinstance(data, dict) else []
+    for row in rows:
+        if isinstance(row, dict):
+            key = str(row.get("question_key") or row.get("id") or row.get("question_id") or "").strip()
+        else:
+            key = str(row or "").strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def load_site_keys(run_dir: Path, exam_code: str) -> set[str]:
+    data = load_json_file(Path(run_dir) / ("%s.site-format.v2.json" % exam_code))
+    keys: set[str] = set()
+    if isinstance(data, dict):
+        for q in data.get("questions") or []:
+            if isinstance(q, dict):
+                key = str(q.get("question_key") or q.get("id") or "").strip()
+                if key:
+                    keys.add(key)
+    return keys
+
+
+def export_status_for(file_id: str, key_in_file: str, held_keys: set[str], site_keys: set[str]) -> str:
+    """Prefer the extracted file stem. A remapped question_key can collide with
+    another item's held or exported ID, so it is only used to detect that this
+    file's content was exported.
+    """
+    if file_id and file_id in held_keys:
+        return "held"
+    if file_id and file_id in site_keys:
+        return "exported"
+    if key_in_file and key_in_file in site_keys:
+        return "exported"
+    if site_keys or held_keys:
+        return "held"
+    return ""
+
+
 def load_items_from_run(run_dir: Path, exam_code: str) -> list[dict]:
+    """Load identity items from PDF-derived extracted files when present.
+
+    The site export is not the identity source: its stems, choices, types,
+    and answer_key forms can change when an item moves from held to exported
+    or when a type-builder wraps the same PDF content. Held items are included.
+    File stems are the stable incoming IDs, even if question_key was remapped.
+    """
+    run_dir = Path(run_dir)
+    held_keys = load_held_keys(run_dir)
+    site_keys = load_site_keys(run_dir, exam_code)
     items: list[dict] = []
     seen_ids: set[str] = set()
-    site = Path(run_dir) / ("%s.site-format.v2.json" % exam_code)
-    if site.is_file():
-        try:
-            data = json.loads(site.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            data = {}
-        for q in (data.get("questions") or []) if isinstance(data, dict) else []:
-            item = item_from_site_question(q)
-            if item and item["question_id"] not in seen_ids:
-                items.append(item)
-                seen_ids.add(item["question_id"])
-    extracted = Path(run_dir) / "extracted" / "items"
+    extracted = run_dir / "extracted" / "items"
     if extracted.is_dir():
         for path in sorted(extracted.glob("*.json")):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            data = load_json_file(path)
+            if not isinstance(data, dict):
                 continue
-            item = item_from_extracted(data)
+            item = item_from_extracted(data, question_id=path.stem)
+            if not item or item["question_id"] in seen_ids:
+                continue
+            item["export_status"] = export_status_for(
+                path.stem, item.get("key_in_file") or "", held_keys, site_keys
+            )
+            items.append(item)
+            seen_ids.add(item["question_id"])
+        return items
+    # Tests and incomplete runs may only have a site file.
+    site = run_dir / ("%s.site-format.v2.json" % exam_code)
+    data = load_json_file(site)
+    if isinstance(data, dict):
+        for q in data.get("questions") or []:
+            item = item_from_site_question(q)
             if item and item["question_id"] not in seen_ids:
+                item["export_status"] = "held" if item["question_id"] in held_keys else "exported"
                 items.append(item)
                 seen_ids.add(item["question_id"])
     return items
@@ -191,6 +268,14 @@ def next_question_id(used: set[str]) -> str:
         if cand not in used:
             return cand
         n += 1
+
+
+def allocate_question_id(incoming_id: str, used_ids: set[str]) -> str:
+    """Keep the incoming PDF key when it is free. Never reuse a retired ID."""
+    cid = (incoming_id or "").strip()
+    if cid and cid not in used_ids:
+        return cid
+    return next_question_id(used_ids)
 
 
 def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
@@ -233,6 +318,8 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
 
         match = by_fp.get(fp) if fp else None
         if match and match["question_id"] not in assigned_old:
+            prev_export = match.get("export_status") or ""
+            new_export = item.get("export_status") or prev_export
             results.append({
                 "question_id": match["question_id"],
                 "incoming_id": item.get("question_id"),
@@ -241,6 +328,9 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
                 "status": "same",
                 "type": item.get("type") or match.get("type") or "",
                 "origin": item.get("origin") or "",
+                "export_status": new_export,
+                "previous_export_status": prev_export,
+                "export_status_changed": bool(prev_export and new_export and prev_export != new_export),
             })
             assigned_old.add(match["question_id"])
             continue
@@ -260,11 +350,14 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
                 "status": "changed",
                 "type": item.get("type") or stem_match.get("type") or "",
                 "origin": item.get("origin") or "",
+                "export_status": item.get("export_status") or stem_match.get("export_status") or "",
+                "previous_export_status": stem_match.get("export_status") or "",
+                "export_status_changed": False,
             })
             assigned_old.add(stem_match["question_id"])
             continue
 
-        new_id = next_question_id(used_ids)
+        new_id = allocate_question_id(item.get("question_id") or "", used_ids)
         used_ids.add(new_id)
         results.append({
             "question_id": new_id,
@@ -274,6 +367,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
             "status": "new",
             "type": item.get("type") or "",
             "origin": item.get("origin") or "",
+            "export_status": item.get("export_status") or "",
         })
 
     retired = []
@@ -287,6 +381,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
                 "status": "retired",
                 "type": q.get("type") or "",
                 "origin": q.get("origin") or "",
+                "export_status": q.get("export_status") or "",
                 "retired_at": utc_now(),
             }
             retired.append(row)
@@ -302,6 +397,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
             "status": "retired",
             "type": q.get("type") or "",
             "origin": q.get("origin") or "",
+            "export_status": q.get("export_status") or "",
             "retired_at": q.get("retired_at") or "",
         })
 
@@ -311,6 +407,9 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
         "new": sum(1 for r in results if r["status"] == "new"),
         "retired": sum(1 for r in results if r["status"] == "retired"),
         "duplicate": len(duplicates),
+        "export_status_changed": sum(1 for r in results if r.get("export_status_changed")),
+        "held": sum(1 for r in results if r.get("status") != "retired" and r.get("export_status") == "held"),
+        "exported": sum(1 for r in results if r.get("status") != "retired" and r.get("export_status") == "exported"),
     }
     return {"items": results, "duplicates": duplicates, "counts": counts}
 
@@ -335,6 +434,9 @@ def write_change_report(path_json: Path, path_md: Path, exam_code: str, result: 
                 "incoming_id": r.get("incoming_id") or "",
                 "status": r.get("status"),
                 "fingerprint": r.get("fingerprint"),
+                "export_status": r.get("export_status") or "",
+                "previous_export_status": r.get("previous_export_status") or "",
+                "export_status_changed": bool(r.get("export_status_changed")),
             }
             for r in result.get("items") or []
         ],
@@ -353,16 +455,18 @@ def write_change_report(path_json: Path, path_md: Path, exam_code: str, result: 
         "- new: %s" % counts.get("new", 0),
         "- retired: %s" % counts.get("retired", 0),
         "- duplicate: %s" % counts.get("duplicate", 0),
+        "- export_status_changed: %s" % counts.get("export_status_changed", 0),
         "",
-        "| question_id | incoming_id | status | fingerprint_prefix |",
-        "| --- | --- | --- | --- |",
+        "| question_id | incoming_id | status | export_status | fingerprint_prefix |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for r in payload["items"]:
         fp = r.get("fingerprint") or ""
-        lines.append("| %s | %s | %s | %s |" % (
+        lines.append("| %s | %s | %s | %s | %s |" % (
             r.get("question_id") or "",
             r.get("incoming_id") or "",
             r.get("status") or "",
+            r.get("export_status") or "",
             fp[:12],
         ))
     if payload["duplicates"]:
@@ -370,7 +474,7 @@ def write_change_report(path_json: Path, path_md: Path, exam_code: str, result: 
     path_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_index(path: Path, exam_code: str, result: dict, source_version=None, source_sha256: str = "") -> None:
+def write_index(path: Path, exam_code: str, result: dict, source_version=None, source_sha256: str = "", extra: dict | None = None) -> None:
     questions = []
     for r in result.get("items") or []:
         questions.append({
@@ -379,6 +483,7 @@ def write_index(path: Path, exam_code: str, result: dict, source_version=None, s
             "stem_fingerprint": r.get("stem_fingerprint") or "",
             "status": "retired" if r.get("status") == "retired" else "active",
             "last_status": r.get("status"),
+            "export_status": r.get("export_status") or "",
             "type": r.get("type") or "",
             "origin": r.get("origin") or "",
             "retired_at": r.get("retired_at") or "",
@@ -389,8 +494,11 @@ def write_index(path: Path, exam_code: str, result: dict, source_version=None, s
         "source_version": source_version,
         "source_sha256": source_sha256,
         "counts": counts_only(result),
+        "id_source": "extracted",
         "questions": questions,
     }
+    if extra:
+        payload.update(extra)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -457,26 +565,27 @@ def load_source_meta(raw_dir: Path) -> tuple[object, str]:
     return current, sha
 
 
-def process_run(exam_code: str, run_dir: Path, raw_dir: Path | None, reports_dir: Path | None = None, update_run_files: bool = True) -> dict:
+def process_run(exam_code: str, run_dir: Path, raw_dir: Path | None, reports_dir: Path | None = None, update_run_files: bool = True, reset_index: bool = False, index_extra: dict | None = None) -> dict:
     if not valid_exam_code(exam_code):
         raise SystemExit("Invalid exam code")
     run_dir = Path(run_dir)
     incoming = load_items_from_run(run_dir, exam_code)
     index_path = Path(raw_dir) / "questions-index.json" if raw_dir else run_dir / "questions-index.json"
-    previous = load_index(index_path).get("questions") or []
+    previous = [] if reset_index else (load_index(index_path).get("questions") or [])
     result = diff_items(previous, incoming)
     version, sha = load_source_meta(raw_dir) if raw_dir else (None, "")
     reports = Path(reports_dir) if reports_dir else (run_dir / "phase-reports")
     if update_run_files:
         write_change_report(reports / "change-report.json", reports / "change-report.md", exam_code, result, version, sha)
         apply_id_mapping(run_dir, exam_code, result)
-        write_index(run_dir / "questions-index.json", exam_code, result, version, sha)
+        write_index(run_dir / "questions-index.json", exam_code, result, version, sha, extra=index_extra)
     if raw_dir:
-        write_index(Path(raw_dir) / "questions-index.json", exam_code, result, version, sha)
+        write_index(Path(raw_dir) / "questions-index.json", exam_code, result, version, sha, extra=index_extra)
         # Keep a copy of the change report next to the index.
+        report_name = ("reseed-change-report" if reset_index else ("v%s-change-report" % (version or "unknown")))
         write_change_report(
-            Path(raw_dir) / "changes" / ("v%s-change-report.json" % (version or "unknown")),
-            Path(raw_dir) / "changes" / ("v%s-change-report.md" % (version or "unknown")),
+            Path(raw_dir) / "changes" / (report_name + ".json"),
+            Path(raw_dir) / "changes" / (report_name + ".md"),
             exam_code, result, version, sha,
         )
     elif not update_run_files:
@@ -491,8 +600,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--raw-dir", type=Path)
     ap.add_argument("--reports-dir", type=Path)
     ap.add_argument("--no-update-run-files", action="store_true", help="Write the index and change report only; do not rewrite a historical run")
+    ap.add_argument("--reset-index", action="store_true", help="Rebuild the index from incoming extracted IDs, ignoring a previous index")
     args = ap.parse_args(argv)
-    result = process_run(args.exam, args.run_dir, args.raw_dir, args.reports_dir, update_run_files=not args.no_update_run_files)
+    result = process_run(args.exam, args.run_dir, args.raw_dir, args.reports_dir, update_run_files=not args.no_update_run_files, reset_index=args.reset_index)
     print(json.dumps({"exam_code": result["exam_code"], **result["counts"]}, indent=2))
     return 0
 
