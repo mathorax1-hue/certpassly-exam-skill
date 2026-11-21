@@ -1,0 +1,780 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1b979e6..05cc15b 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## Unreleased (local branch feat/groq-ai-vision)
++
++A Groq provider can transcribe items still held after the enhance retry and the 400 dpi page-region retry. It is off by default. A private runner can enable it with environment variables. The default model is `qwen/qwen3.8-27b`, temperature is 0, and images are sent as data URIs with a User-Agent header. The API key is read only from `GROQ_API_KEY` and is never logged or written to reports. A per-run cap (default 50 calls), a timeout, and a small retry limit protect usage. `CERTPASSLY_USE_COMMITTED_AI_READS=false` or `--ignore-committed-ai-reads` skips committed `review/ai-reads.json` so the live provider does the reads. Acceptance still uses the original dual OCR passes and the PDF text layer. Failures stay on the review sheet with the AI text as a suggestion. Provenance (model, request time, image sha256, call count) is written to `export/ai-vision.json`.
++
++Tests: `tests/test_ai_vision_groq.py` (mock HTTP, no live calls).
++
++
+ ## Unreleased (local branch feat/page-region-ai-vision)
+ 
+ If the first OCR enhance retry still holds an item, a second scripted pass crops the question region from a 400 dpi render of the PDF page and reruns the same strict gate.
+diff --git a/config/ocr.json b/config/ocr.json
+index b1ec0a9..57b76ad 100644
+--- a/config/ocr.json
++++ b/config/ocr.json
+@@ -114,6 +114,13 @@
+   "ai_vision": {
+     "enabled": false,
+     "provider": "none",
++    "model": "qwen/qwen3.8-27b",
++    "temperature": 0,
++    "timeout_seconds": 60,
++    "max_retries": 2,
++    "max_calls_per_run": 50,
++    "api_url": "https://api.groq.com/openai/v1/chat/completions",
++    "use_committed_reads": true,
+     "accept_ocr_word_confidence": 90
+   }
+ }
+diff --git a/docs/ocr.md b/docs/ocr.md
+index 8b6d1a8..2245ab8 100644
+--- a/docs/ocr.md
++++ b/docs/ocr.md
+@@ -76,7 +76,9 @@ When the first enhance retry still holds an item for OCR quality, a second scrip
+ 
+ ## AI vision hook
+ 
+-If both scripted retries still hold the item, a committed `review/ai-reads.json` (or `review/ai-reads/QUESTION.json`) may supply a transcription. The hook in `scripts/ai_vision.py` is off by default (`ai_vision.enabled` is false, `provider` is `none`) because Actions has no AI key. A later local provider can be plugged in through `hook_module`; the hook never auto-fills empty files.
++If both scripted retries still hold the item, an AI vision provider can transcribe the held images. The hook in `scripts/ai_vision.py` is off by default (`ai_vision.enabled` is false, `provider` is `none`). A private runner can set `CERTPASSLY_AI_VISION_ENABLED=true` and `CERTPASSLY_AI_VISION_PROVIDER=groq` to call Groq after the scripted retries. The Groq model default is `qwen/qwen3.8-27b`, temperature is 0, and the prompt asks for a strict transcription only. The API key is read from the environment variable `GROQ_API_KEY` and is never written to logs or reports. A per-run cap (`ai_vision.max_calls_per_run`, default 50) limits provider calls. Requests use a User-Agent header and send images as data URIs. Timeouts and a small number of retries apply to transient HTTP errors.
++
++Committed `review/ai-reads.json` (or `review/ai-reads/QUESTION.json`) files are used when `ai_vision.use_committed_reads` is true (the default). Set `CERTPASSLY_USE_COMMITTED_AI_READS=false` or pass `--ignore-committed-ai-reads` so the live provider does the reads instead. A `hook_module` remains supported for other providers. The hook never auto-fills empty owner-correction files.
+ 
+ An AI transcription is accepted only when:
+ 
+@@ -84,7 +86,7 @@ An AI transcription is accepted only when:
+ - every PDF text-layer word is still covered (by the AI text plus the already extracted stem and choices)
+ - type and key rules pass, and the site v2 schema still accepts the question
+ 
+-Accepted items are exported with `answer.reviewer_needed` set to true. The `ai_vision` provenance (source, confidence, image sha256, transcribed text) is written to `export/ai-vision.json` in raw-exam reports, not to site-file fields the schema forbids. If the AI text is not accepted, the item stays on the review sheet and the AI text is stored as `ai_suggestion` only. `owner_text` and `owner_decision` stay empty.
++Accepted items are exported with `answer.reviewer_needed` set to true. The `ai_vision` provenance (source, provider, model, request time, duration, image sha256, transcribed text, call count) is written to `export/ai-vision.json` in raw-exam reports, not to site-file fields the schema forbids. The API key is never stored in that report. If the AI text is not accepted, the item stays on the review sheet and the AI text is stored as `ai_suggestion` only. `owner_text` and `owner_decision` stay empty.
+ 
+ See `examples/ai-reads.example.json`.
+ 
+diff --git a/scripts/ai_vision.py b/scripts/ai_vision.py
+index 34103fe..52e2f0a 100644
+--- a/scripts/ai_vision.py
++++ b/scripts/ai_vision.py
+@@ -10,11 +10,40 @@ import fidelity
+ from ocr_retry import file_sha256
+ 
+ 
++def _env_bool(name, default=None):
++    raw = os.environ.get(name)
++    if raw is None or str(raw).strip() == '':
++        return default
++    return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
++
++
+ def vision_config(ocr_cfg=None):
+     cfg = dict((ocr_cfg or {}).get('ai_vision') or {})
+-    cfg.setdefault('enabled', False)
+-    cfg.setdefault('provider', 'none')
++    # File defaults stay off. Env can enable a provider in a private runner.
++    if _env_bool('CERTPASSLY_AI_VISION_ENABLED') is not None:
++        cfg['enabled'] = _env_bool('CERTPASSLY_AI_VISION_ENABLED')
++    else:
++        cfg.setdefault('enabled', False)
++    env_provider = (os.environ.get('CERTPASSLY_AI_VISION_PROVIDER') or '').strip()
++    if env_provider:
++        cfg['provider'] = env_provider
++    else:
++        cfg.setdefault('provider', 'none')
++    env_model = (os.environ.get('CERTPASSLY_AI_VISION_MODEL') or '').strip()
++    if env_model:
++        cfg['model'] = env_model
++    cfg.setdefault('model', 'qwen/qwen3.8-27b')
++    cfg.setdefault('temperature', 0)
++    cfg.setdefault('timeout_seconds', 60)
++    cfg.setdefault('max_retries', 2)
++    cfg.setdefault('max_calls_per_run', 50)
++    cfg.setdefault('api_url', 'https://api.groq.com/openai/v1/chat/completions')
+     cfg.setdefault('accept_ocr_word_confidence', 90)
++    committed = _env_bool('CERTPASSLY_USE_COMMITTED_AI_READS')
++    if committed is not None:
++        cfg['use_committed_reads'] = committed
++    else:
++        cfg.setdefault('use_committed_reads', True)
+     return cfg
+ 
+ 
+@@ -229,21 +258,36 @@ def build_record(item, read, verdict, now=None):
+         'source_path': read.get('_source_path') or '',
+         'reason': '' if (verdict or {}).get('ok') else ((verdict or {}).get('reason') or ''),
+         'recorded_at': now,
++        'request_time': read.get('request_time') or '',
++        'duration_ms': read.get('duration_ms'),
++        'http_status': read.get('http_status'),
++        'provider': read.get('provider') or read.get('source') or '',
++        'groq_call_index': read.get('groq_call_index'),
++        'skip_reason': read.get('skip_reason') or '',
+         'transcribed_text': read.get('transcribed_text') or read.get('text') or '',
+     }
+ 
+ 
+-def write_report(out_dir, exam, records):
++def write_report(out_dir, exam, records, groq_calls=None):
+     export_dir = os.path.join(out_dir, 'export')
+     os.makedirs(export_dir, exist_ok=True)
+     path = os.path.join(export_dir, 'ai-vision.json')
+     accepted = sum(1 for r in records if r.get('accepted'))
++    if groq_calls is None:
++        groq_calls = 0
++        for rec in records:
++            if rec.get('groq_call_index'):
++                try:
++                    groq_calls = max(groq_calls, int(rec['groq_call_index']))
++                except (TypeError, ValueError):
++                    pass
+     payload = {
+         'exam': exam,
+         'count': len(records),
+         'accepted': accepted,
+         'rejected': len(records) - accepted,
+-        'note': 'AI vision provenance. This file is a raw-exam report, not a site v2 field.',
++        'groq_calls': groq_calls,
++        'note': 'AI vision provenance. This file is a raw-exam report, not a site v2 field. The API key is never stored here.',
+         'items': records,
+     }
+     with open(path, 'w', encoding='utf-8') as fh:
+@@ -252,20 +296,70 @@ def write_report(out_dir, exam, records):
+     return path
+ 
+ 
+-def run_provider(item, images, cfg):
+-    """Extension point. Returns None when disabled or no provider is configured.
++def _as_vision_cfg(cfg):
++    if isinstance(cfg, dict) and 'ai_vision' in cfg:
++        return vision_config(cfg)
++    if isinstance(cfg, dict) and ('provider' in cfg or 'model' in cfg or 'enabled' in cfg):
++        return vision_config({'ai_vision': cfg})
++    return vision_config(cfg)
++
++
++def collect_item_image_paths(item, out_dir, ocr_images=None):
++    """Prefer 400 dpi page-region crops, then enhance retries, then source images."""
++    from ocr_retry import _safe_name
++    key = (item or {}).get('question_key') or 'item'
++    names = list((item or {}).get('question_images') or [])
++    names += [fn for fn in ((item or {}).get('answer_images') or []) if fn not in names]
++    if ocr_images:
++        for im in ocr_images:
++            fn = (im or {}).get('file') if isinstance(im, dict) else im
++            if fn and fn not in names:
++                names.append(fn)
++    paths = []
++    seen = set()
++    for fn in names:
++        base = os.path.basename(str(fn))
++        safe = _safe_name(base)
++        cands = []
++        if out_dir:
++            cands.extend([
++                os.path.join(out_dir, 'media', 'page-region', '%s-%s' % (key, safe)),
++                os.path.join(out_dir, 'media', 'page-region', '%s-%s' % (key, base)),
++                os.path.join(out_dir, 'media', 'retry', '%s-%s' % (key, safe)),
++                os.path.join(out_dir, 'media', 'retry', '%s-%s' % (key, base)),
++                os.path.join(out_dir, 'media', 'src', base),
++            ])
++        if os.path.isabs(str(fn)) or os.path.isfile(str(fn)):
++            cands.append(str(fn))
++        for cand in cands:
++            if cand and os.path.isfile(cand) and cand not in seen:
++                paths.append(cand)
++                seen.add(cand)
++                break
++    return paths
++
+ 
+-    Actions has no AI key; provider stays 'none' and enabled stays false there.
+-    A local or future provider can return a dict with transcribed_text.
++def run_provider(item, images, cfg, out_dir=None, budget=None):
++    """Run the configured vision provider. Returns None when disabled.
++
++    The default provider is none. Groq is used only when enabled and provider
++    is groq. The API key is read from GROQ_API_KEY and is never logged.
++    A hook_module remains supported for other providers.
+     """
+-    vcfg = vision_config(cfg if isinstance(cfg, dict) and 'ai_vision' in (cfg or {}) else {'ai_vision': cfg or {}})
+-    if isinstance(cfg, dict) and 'provider' in cfg:
+-        vcfg = vision_config({'ai_vision': cfg})
++    vcfg = _as_vision_cfg(cfg)
+     if not vcfg.get('enabled'):
+         return None
+     provider = str(vcfg.get('provider') or 'none').strip().lower()
+     if provider in ('', 'none', 'off', 'disabled'):
+         return None
++    paths = []
++    if images and all(isinstance(x, str) for x in images):
++        paths = [p for p in images if p and os.path.isfile(p)]
++    if not paths:
++        paths = collect_item_image_paths(item, out_dir, images if images and not all(isinstance(x, str) for x in (images or [])) else None)
++    if provider == 'groq':
++        import ai_vision_groq as G
++        return G.transcribe_item(item, paths, vcfg, budget=budget)
+     hook = vcfg.get('hook_module')
+     if not hook:
+         return None
+@@ -274,4 +368,4 @@ def run_provider(item, images, cfg):
+     fn = getattr(mod, 'transcribe_item', None)
+     if not callable(fn):
+         return None
+-    return fn(item, images, vcfg)
++    return fn(item, paths, vcfg)
+diff --git a/scripts/ai_vision_groq.py b/scripts/ai_vision_groq.py
+new file mode 100644
+index 0000000..efa70cc
+--- /dev/null
++++ b/scripts/ai_vision_groq.py
+@@ -0,0 +1,224 @@
++#!/usr/bin/env python3
++"""Groq vision provider for OCR-held items. The API key is never logged."""
++from __future__ import annotations
++
++import base64
++import json
++import os
++import time
++import urllib.error
++import urllib.request
++
++DEFAULT_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
++DEFAULT_MODEL = 'qwen/qwen3.8-27b'
++DEFAULT_USER_AGENT = 'certpassly-exam-pipeline/1.3.0'
++TRANSCRIBE_PROMPT = (
++    'Transcribe every visible character in the image(s) exactly as written. '
++    'Include line numbers, punctuation, spacing, symbols, and typographic marks as they appear. '
++    'Do not correct, complete, translate, or explain the text. '
++    'Do not add words that are not visible. '
++    'If there are several images, transcribe them in order, separated by a blank line. '
++    'Return only the transcription.'
++)
++
++
++def api_key_from_env():
++    """Read GROQ_API_KEY from the environment. Never log the value."""
++    raw = os.environ.get('GROQ_API_KEY')
++    if raw is None:
++        return None
++    key = str(raw).strip()
++    return key or None
++
++
++class CallBudget:
++    """Per-run cap on provider HTTP calls."""
++
++    def __init__(self, max_calls=50):
++        try:
++            self.max_calls = int(max_calls)
++        except (TypeError, ValueError):
++            self.max_calls = 50
++        if self.max_calls < 0:
++            self.max_calls = 0
++        self.used = 0
++
++    def remaining(self):
++        return max(0, self.max_calls - self.used)
++
++    def allow(self):
++        if self.used >= self.max_calls:
++            return False
++        self.used += 1
++        return True
++
++
++def image_to_data_uri(path):
++    if not path or not os.path.isfile(path):
++        return None
++    ext = os.path.splitext(path)[1].lower()
++    mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
++            '.gif': 'image/gif', '.webp': 'image/webp'}.get(ext, 'image/png')
++    with open(path, 'rb') as fh:
++        blob = fh.read()
++    if not blob:
++        return None
++    return 'data:%s;base64,%s' % (mime, base64.b64encode(blob).decode('ascii'))
++
++
++def build_payload(image_paths, cfg=None):
++    cfg = cfg or {}
++    model = cfg.get('model') or DEFAULT_MODEL
++    try:
++        temperature = float(cfg.get('temperature', 0))
++    except (TypeError, ValueError):
++        temperature = 0.0
++    prompt = cfg.get('prompt') or TRANSCRIBE_PROMPT
++    content = [{'type': 'text', 'text': prompt}]
++    used = []
++    for path in image_paths or []:
++        uri = image_to_data_uri(path)
++        if not uri:
++            continue
++        content.append({'type': 'image_url', 'image_url': {'url': uri}})
++        used.append(path)
++    if len(content) == 1:
++        return None, used
++    payload = {
++        'model': model,
++        'temperature': temperature,
++        'messages': [{'role': 'user', 'content': content}],
++    }
++    return payload, used
++
++
++def post_json(url, headers, payload, timeout):
++    data = json.dumps(payload).encode('utf-8')
++    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
++    try:
++        with urllib.request.urlopen(req, timeout=timeout) as resp:
++            body = resp.read().decode('utf-8', errors='replace')
++            status = getattr(resp, 'status', None) or resp.getcode()
++            return int(status), json.loads(body) if body else {}
++    except urllib.error.HTTPError as exc:
++        raw = exc.read().decode('utf-8', errors='replace') if exc.fp else ''
++        try:
++            parsed = json.loads(raw) if raw else {}
++        except json.JSONDecodeError:
++            parsed = {}
++        return int(exc.code), parsed
++
++
++def _message_text(body):
++    if not isinstance(body, dict):
++        return ''
++    choices = body.get('choices') or []
++    if not choices or not isinstance(choices[0], dict):
++        return ''
++    msg = choices[0].get('message') or {}
++    text = msg.get('content')
++    if isinstance(text, list):
++        parts = []
++        for part in text:
++            if isinstance(part, dict) and part.get('text'):
++                parts.append(part['text'])
++            elif isinstance(part, str):
++                parts.append(part)
++        return '\n'.join(parts).strip()
++    return str(text or '').strip()
++
++
++def _redact(text, key):
++    """Drop any accidental copy of the key from a string we might log."""
++    if not text or not key:
++        return text
++    return str(text).replace(key, '[redacted]')
++
++
++def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=None):
++    """Call Groq once for an item. Returns a read dict or a skipped/error dict.
++
++    The API key is never included in the return value or in log fields.
++    """
++    cfg = cfg or {}
++    key = key if key is not None else api_key_from_env()
++    started = time.time()
++    request_time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
++    model = cfg.get('model') or DEFAULT_MODEL
++    out = {
++        'question_key': (item or {}).get('question_key'),
++        'source': 'groq',
++        'provider': 'groq',
++        'model': model,
++        'request_time': request_time,
++        'image_sha256': '',
++        'transcribed_text': '',
++    }
++    if not key:
++        out['skip_reason'] = 'GROQ_API_KEY is not set'
++        out['duration_ms'] = int((time.time() - started) * 1000)
++        return out
++    if budget is not None and not budget.allow():
++        out['skip_reason'] = 'AI vision call cap reached'
++        out['duration_ms'] = int((time.time() - started) * 1000)
++        return out
++    payload, used = build_payload(image_paths, cfg)
++    if not payload:
++        out['skip_reason'] = 'no readable images for Groq'
++        out['duration_ms'] = int((time.time() - started) * 1000)
++        return out
++    from ocr_retry import file_sha256
++    out['image_sha256'] = ' | '.join(
++        '%s:%s' % (os.path.basename(p), file_sha256(p) or '') for p in used)
++    url = cfg.get('api_url') or DEFAULT_API_URL
++    try:
++        timeout = float(cfg.get('timeout_seconds') or 60)
++    except (TypeError, ValueError):
++        timeout = 60.0
++    try:
++        max_retries = int(cfg.get('max_retries') or 2)
++    except (TypeError, ValueError):
++        max_retries = 2
++    headers = {
++        'Authorization': 'Bearer ' + key,
++        'Content-Type': 'application/json',
++        'User-Agent': cfg.get('user_agent') or DEFAULT_USER_AGENT,
++    }
++    poster = post or post_json
++    last_status = None
++    last_error = None
++    attempts = max(1, max_retries + 1)
++    for i in range(attempts):
++        try:
++            status, body = poster(url, headers, payload, timeout)
++        except Exception as exc:
++            last_error = _redact(str(exc), key)
++            last_status = None
++            if i + 1 < attempts:
++                time.sleep(min(2 ** i, 8))
++            continue
++        last_status = status
++        if status == 200:
++            text = _message_text(body)
++            out['transcribed_text'] = text
++            out['http_status'] = status
++            out['attempts'] = i + 1
++            out['duration_ms'] = int((time.time() - started) * 1000)
++            if budget is not None:
++                out['groq_call_index'] = budget.used
++            if not text:
++                out['skip_reason'] = 'Groq returned an empty transcription'
++            return out
++        # Retry transient failures only. Do not retry 401/403/400.
++        last_error = 'HTTP %s' % status
++        if status in (401, 403, 400, 404, 413, 422):
++            break
++        if i + 1 < attempts:
++            time.sleep(min(2 ** i, 8))
++    out['http_status'] = last_status
++    out['attempts'] = attempts
++    out['skip_reason'] = last_error or 'Groq request failed'
++    out['duration_ms'] = int((time.time() - started) * 1000)
++    if budget is not None:
++        out['groq_call_index'] = budget.used
++    return out
+diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
+index 0b94cee..cc249ed 100644
+--- a/scripts/build_technical_export.py
++++ b/scripts/build_technical_export.py
+@@ -427,6 +427,8 @@ def main(argv=None):
+     ap.add_argument('--root', help='Workspace root.')
+     ap.add_argument('--corrections', help='Path to owner-corrections.json')
+     ap.add_argument('--ai-reads', help='Path to ai-reads.json')
++    ap.add_argument('--ignore-committed-ai-reads', action='store_true',
++                    help='Do not load review/ai-reads.json; call the live provider instead.')
+     args = ap.parse_args(argv)
+     if args.root:
+         paths.set_root(args.root)
+@@ -455,14 +457,23 @@ def main(argv=None):
+     deny = fidelity.make_deny(fid_cfg) if fid_cfg else None
+ 
+     corrections = OC.load_corrections(args.root, exam, args.corrections)
+-    ai_reads = AI.load_reads(args.root, exam, getattr(args, 'ai_reads', None), out_dir=out)
+     ocr_cfg = V.load_ocr_config() or {}
++    vision_cfg = AI.vision_config(ocr_cfg)
++    use_committed = bool(vision_cfg.get('use_committed_reads', True))
++    if getattr(args, 'ignore_committed_ai_reads', False):
++        use_committed = False
++    if use_committed:
++        ai_reads = AI.load_reads(args.root, exam, getattr(args, 'ai_reads', None), out_dir=out)
++    else:
++        ai_reads = {}
+     retry_cfg = ocr_retry.retry_config(ocr_cfg)
+     pdf = O.find_pdf(out)
+     retry_logs = []
+     owner_records = []
+     ai_records = []
+     ai_by_key = {}
++    import ai_vision_groq as G
++    ai_budget = G.CallBudget(vision_cfg.get('max_calls_per_run') or 50)
+ 
+     questions = []
+     held = []
+@@ -547,11 +558,20 @@ def main(argv=None):
+             if hold and ocr_retry.is_ocr_hold(hold, gate):
+                 read = ai_reads.get(key)
+                 if not read:
+-                    hook = AI.run_provider(item, (ocr_item or {}).get('images') or [], ocr_cfg)
+-                    if isinstance(hook, dict) and AI.is_complete_read(hook):
++                    hook = AI.run_provider(
++                        item, (ocr_item or {}).get('images') or [], ocr_cfg,
++                        out_dir=out, budget=ai_budget)
++                    if isinstance(hook, dict):
+                         hook = dict(hook)
+                         hook.setdefault('question_key', key)
+-                        read = hook
++                        if AI.is_complete_read(hook):
++                            read = hook
++                        else:
++                            # Provider ran but produced no usable text. Keep a report row.
++                            rec = AI.build_record(item, hook, {'ok': False, 'reason': hook.get('skip_reason') or 'no transcription'})
++                            rec['accepted'] = False
++                            ai_records.append(rec)
++                            ai_by_key[key] = dict(hook, verdict={'ok': False, 'reason': rec['reason']})
+                 if read:
+                     verdict = AI.accept_ai_text(
+                         read.get('transcribed_text') or read.get('text') or '',
+@@ -673,7 +693,7 @@ def main(argv=None):
+     if owner_records:
+         OC.write_records(out, exam, owner_records)
+     if ai_records:
+-        AI.write_report(out, exam, ai_records)
++        AI.write_report(out, exam, ai_records, groq_calls=ai_budget.used)
+     print('technical export: %s detected=%s held=%s types=%s file=%s' % (
+         exam, len(questions), len(held), by_type, dest))
+     return 0
+diff --git a/tests/test_ai_vision_groq.py b/tests/test_ai_vision_groq.py
+new file mode 100644
+index 0000000..fd6b012
+--- /dev/null
++++ b/tests/test_ai_vision_groq.py
+@@ -0,0 +1,244 @@
++#!/usr/bin/env python3
++"""Groq AI vision provider tests. HTTP is mocked. No live calls and no real keys."""
++from __future__ import annotations
++
++import json
++import os
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++from unittest import mock
++
++import cv2
++import numpy as np
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / 'scripts'))
++
++import ai_vision as AI
++import ai_vision_groq as G
++
++
++def _png(path, w=40, h=20):
++    img = np.full((h, w, 3), 240, dtype=np.uint8)
++    cv2.imwrite(str(path), img)
++
++
++class FakeHttp:
++    def __init__(self, responses):
++        self.responses = list(responses)
++        self.calls = []
++
++    def __call__(self, url, headers, payload, timeout):
++        rec = {
++            'url': url,
++            'header_names': sorted(headers.keys()),
++            'has_authorization': 'Authorization' in headers,
++            'authorization_prefix': (headers.get('Authorization') or '')[:6],
++            'user_agent': headers.get('User-Agent'),
++            'model': (payload or {}).get('model'),
++            'temperature': (payload or {}).get('temperature'),
++            'timeout': timeout,
++            'n_images': 0,
++        }
++        for msg in (payload or {}).get('messages') or []:
++            for part in msg.get('content') or []:
++                if isinstance(part, dict) and part.get('type') == 'image_url':
++                    rec['n_images'] += 1
++                    uri = ((part.get('image_url') or {}).get('url') or '')
++                    rec['data_uri_prefix'] = uri[:22]
++        # Never keep the raw Authorization value in the call log.
++        self.calls.append(rec)
++        if not self.responses:
++            return 500, {}
++        item = self.responses.pop(0)
++        if isinstance(item, Exception):
++            raise item
++        return item
++
++
++class VisionConfigTests(unittest.TestCase):
++    def test_defaults_stay_off(self):
++        with mock.patch.dict(os.environ, {}, clear=False):
++            for name in (
++                'CERTPASSLY_AI_VISION_ENABLED', 'CERTPASSLY_AI_VISION_PROVIDER',
++                'CERTPASSLY_AI_VISION_MODEL', 'CERTPASSLY_USE_COMMITTED_AI_READS',
++            ):
++                os.environ.pop(name, None)
++            cfg = AI.vision_config({'ai_vision': {}})
++        self.assertFalse(cfg['enabled'])
++        self.assertEqual(cfg['provider'], 'none')
++        self.assertEqual(cfg['model'], 'qwen/qwen3.8-27b')
++        self.assertEqual(cfg['temperature'], 0)
++        self.assertEqual(cfg['max_calls_per_run'], 50)
++        self.assertTrue(cfg['use_committed_reads'])
++
++    def test_env_enables_groq_and_ignores_committed_reads(self):
++        env = {
++            'CERTPASSLY_AI_VISION_ENABLED': 'true',
++            'CERTPASSLY_AI_VISION_PROVIDER': 'groq',
++            'CERTPASSLY_AI_VISION_MODEL': 'qwen/qwen3.8-27b',
++            'CERTPASSLY_USE_COMMITTED_AI_READS': 'false',
++        }
++        with mock.patch.dict(os.environ, env, clear=False):
++            cfg = AI.vision_config({'ai_vision': {'enabled': False, 'provider': 'none'}})
++        self.assertTrue(cfg['enabled'])
++        self.assertEqual(cfg['provider'], 'groq')
++        self.assertFalse(cfg['use_committed_reads'])
++
++
++class GroqProviderTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.dir = Path(self.tmp.name)
++        self.img = self.dir / 'crop.png'
++        _png(self.img)
++        self.item = {'question_key': 'q003', 'question_images': ['q003-1.png']}
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def test_successful_transcription_uses_data_uri_and_user_agent(self):
++        body = {'choices': [{'message': {'content': 'visible text from the crop'}}]}
++        http = FakeHttp([(200, body)])
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'model': 'qwen/qwen3.8-27b', 'temperature': 0, 'timeout_seconds': 15, 'max_retries': 0},
++            post=http, budget=G.CallBudget(50), key='test-key-not-real')
++        self.assertEqual(out['transcribed_text'], 'visible text from the crop')
++        self.assertEqual(out['model'], 'qwen/qwen3.8-27b')
++        self.assertEqual(out['provider'], 'groq')
++        self.assertEqual(out['http_status'], 200)
++        self.assertTrue(out['request_time'])
++        self.assertTrue(out['image_sha256'])
++        self.assertIn('crop.png:', out['image_sha256'])
++        self.assertEqual(len(http.calls), 1)
++        call = http.calls[0]
++        self.assertEqual(call['model'], 'qwen/qwen3.8-27b')
++        self.assertEqual(call['temperature'], 0)
++        self.assertEqual(call['user_agent'], G.DEFAULT_USER_AGENT)
++        self.assertEqual(call['n_images'], 1)
++        self.assertTrue(call['data_uri_prefix'].startswith('data:image/png;base64,'))
++        self.assertEqual(call['authorization_prefix'], 'Bearer')
++        blob = json.dumps(out)
++        self.assertNotIn('test-key-not-real', blob)
++        self.assertNotIn('test-key-not-real', json.dumps(http.calls))
++
++    def test_retries_on_429_then_succeeds(self):
++        body = {'choices': [{'message': {'content': 'ok after retry'}}]}
++        http = FakeHttp([(429, {'error': {'message': 'rate'}}), (200, body)])
++        with mock.patch('ai_vision_groq.time.sleep', return_value=None):
++            out = G.transcribe_item(
++                self.item, [str(self.img)],
++                {'max_retries': 2, 'timeout_seconds': 5},
++                post=http, budget=G.CallBudget(5), key='k')
++        self.assertEqual(out['transcribed_text'], 'ok after retry')
++        self.assertEqual(out['attempts'], 2)
++        self.assertEqual(len(http.calls), 2)
++
++    def test_does_not_retry_unauthorized(self):
++        http = FakeHttp([(401, {'error': {'message': 'no'}})])
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 3}, post=http, budget=G.CallBudget(5), key='k')
++        self.assertEqual(out['http_status'], 401)
++        self.assertFalse(out['transcribed_text'])
++        self.assertIn('HTTP 401', out['skip_reason'])
++        self.assertEqual(len(http.calls), 1)
++
++    def test_missing_key_does_not_call_http(self):
++        http = FakeHttp([(200, {})])
++        with mock.patch.dict(os.environ, {}, clear=False):
++            os.environ.pop('GROQ_API_KEY', None)
++            out = G.transcribe_item(self.item, [str(self.img)], {}, post=http, budget=G.CallBudget(5))
++        self.assertEqual(out['skip_reason'], 'GROQ_API_KEY is not set')
++        self.assertEqual(http.calls, [])
++
++    def test_call_cap_blocks_after_limit(self):
++        body = {'choices': [{'message': {'content': 'one'}}]}
++        http = FakeHttp([(200, body), (200, body)])
++        budget = G.CallBudget(1)
++        first = G.transcribe_item(self.item, [str(self.img)], {'max_retries': 0}, post=http, budget=budget, key='k')
++        second = G.transcribe_item(self.item, [str(self.img)], {'max_retries': 0}, post=http, budget=budget, key='k')
++        self.assertEqual(first['transcribed_text'], 'one')
++        self.assertEqual(second['skip_reason'], 'AI vision call cap reached')
++        self.assertEqual(len(http.calls), 1)
++        self.assertEqual(budget.used, 1)
++
++    def test_run_provider_dispatches_groq_when_enabled(self):
++        body = {'choices': [{'message': {'content': 'from provider'}}]}
++        http = FakeHttp([(200, body)])
++        cfg = {
++            'ai_vision': {
++                'enabled': True,
++                'provider': 'groq',
++                'model': 'qwen/qwen3.8-27b',
++                'temperature': 0,
++                'max_retries': 0,
++            }
++        }
++        with mock.patch('ai_vision_groq.post_json', http):
++            out = AI.run_provider(self.item, [str(self.img)], cfg, budget=G.CallBudget(5))
++        # run_provider uses env key; patch transcribe to inject key via G.api_key
++        # If GROQ_API_KEY is set in this environment, this would make a mocked post only.
++        # If not set, skip. Force the key for this test by calling with patched env.
++        if out is None or out.get('skip_reason') == 'GROQ_API_KEY is not set':
++            with mock.patch.dict(os.environ, {'GROQ_API_KEY': 'k'}, clear=False):
++                with mock.patch('ai_vision_groq.post_json', http):
++                    out = AI.run_provider(self.item, [str(self.img)], cfg, budget=G.CallBudget(5))
++        self.assertEqual(out['transcribed_text'], 'from provider')
++        self.assertEqual(out['provider'], 'groq')
++
++    def test_run_provider_stays_off_by_default(self):
++        http = FakeHttp([(200, {'choices': [{'message': {'content': 'no'}}]})])
++        with mock.patch.dict(os.environ, {}, clear=False):
++            for name in ('CERTPASSLY_AI_VISION_ENABLED', 'CERTPASSLY_AI_VISION_PROVIDER'):
++                os.environ.pop(name, None)
++            with mock.patch('ai_vision_groq.post_json', http):
++                out = AI.run_provider(self.item, [str(self.img)], {'ai_vision': {}})
++        self.assertIsNone(out)
++        self.assertEqual(http.calls, [])
++
++    def test_report_includes_model_time_hash_not_key(self):
++        rec = AI.build_record(
++            self.item,
++            {
++                'source': 'groq',
++                'provider': 'groq',
++                'model': 'qwen/qwen3.8-27b',
++                'confidence': 0.0,
++                'request_time': '2026-11-21T12:00:00Z',
++                'duration_ms': 120,
++                'image_sha256': 'crop.png:abcd',
++                'transcribed_text': 'hello',
++                'groq_call_index': 1,
++            },
++            {'ok': True, 'reason': 'accepted'},
++        )
++        path = AI.write_report(str(self.dir), 'DEMO', [rec], groq_calls=1)
++        payload = json.loads(Path(path).read_text())
++        self.assertEqual(payload['groq_calls'], 1)
++        item = payload['items'][0]
++        self.assertEqual(item['model'], 'qwen/qwen3.8-27b')
++        self.assertEqual(item['request_time'], '2026-11-21T12:00:00Z')
++        self.assertEqual(item['image_sha256'], 'crop.png:abcd')
++        dumped = Path(path).read_text()
++        self.assertNotIn('GROQ_API_KEY', dumped)
++        self.assertNotIn('Bearer ', dumped)
++
++    def test_multiple_images_one_call(self):
++        img2 = self.dir / 'crop2.png'
++        _png(img2)
++        body = {'choices': [{'message': {'content': 'a\n\nb'}}]}
++        http = FakeHttp([(200, body)])
++        out = G.transcribe_item(
++            self.item, [str(self.img), str(img2)],
++            {'max_retries': 0}, post=http, budget=G.CallBudget(5), key='k')
++        self.assertEqual(out['transcribed_text'], 'a\n\nb')
++        self.assertEqual(http.calls[0]['n_images'], 2)
++        self.assertEqual(len(http.calls), 1)
++
++
++if __name__ == '__main__':
++    unittest.main()
