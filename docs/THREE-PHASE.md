@@ -83,5 +83,6 @@ The public three-phase workflow (and the disabled-by-default private fallback) c
 5. `v1.3.0-page-region-ai-vision3-groq-images.patch` stitches more than 3 held crops into one image, because the Qwen model rejects a request with more than 3 images, and prefers the 400 dpi crop files.
 6. `v1.3.0-question-type-builders.patch` reads every question type the site accepts from the PDF, scripts only: Yes/No and choice grids, drop-down answer areas, image hotspots, ordering, matching, categorization, drag and drop, scenario and case study groups. See [question types](QUESTION-TYPES.md).
 7. `v1.3.0-ratelimit-groq-429.patch` waits and retries on Groq HTTP 429 using Retry-After, x-ratelimit-reset-tokens, or a try-again message (capped, at most two waits per item), and paces calls to a 6000 ITPM budget so later items are less likely to hit the limit.
+8. `v1.3.0-staging-type-builders.patch` adds PDF builders for the four staging types that already have a v2 answer layout: multi_select_matrix, text_cloze, short_text and numeric. They are tagged staging_draft_only and stay drafts until the site publishable flag is on.
 
 The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.

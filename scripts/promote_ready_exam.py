@@ -27,6 +27,25 @@ def _load(path: Path | None) -> dict:
 
 
 TEST_FIXTURE_CODES = {"QTYPE-FIXTURE"}
+STAGING_TYPES = {"multi_select_matrix", "text_cloze", "short_text", "numeric"}
+STAGING_TAG = "staging_draft_only"
+
+
+def staging_items(site_file: Path | None) -> list[dict]:
+    """Questions whose site type is not publishable. They must stay draft only."""
+    if not site_file or not site_file.is_file():
+        return []
+    try:
+        doc = json.loads(site_file.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return []
+    rows = []
+    for q in doc.get("questions") or []:
+        typ = q.get("type")
+        tags = q.get("tags") or []
+        if typ in STAGING_TYPES or STAGING_TAG in tags:
+            rows.append({"question_key": q.get("question_key"), "type": typ, "publication": "draft_only"})
+    return rows
 
 
 def is_test_fixture(exam: str, site_file: Path | None) -> bool:
@@ -89,6 +108,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         reasons.append("test-only fixture exam (never promote)")
     if not args.promote:
         reasons.append("promote flag was not set (auto promotion is forbidden)")
+    staging = staging_items(args.site_file)
     status = "promoted" if not reasons and args.promote else "not_promoted"
     return {
         "schema_version": 1,
@@ -98,6 +118,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "raw_exam_commit": args.raw_commit,
         "published": False,
         "ready_for_publication": False,
+        "staging_draft_only": staging,
         "human_review_status": "pending",
         "editorial_process": "AI-assisted draft; independent human subject review pending",
     }
@@ -125,6 +146,8 @@ def promote(args: argparse.Namespace, decision: dict) -> dict:
         "ready_for_publication": False,
         "human_review_status": "pending",
         "note": "Validated technical and import draft only. Not a website publication and not an independent human review.",
+        "staging_draft_only": decision.get("staging_draft_only") or [],
+        "publication_note": "Staging types stay draft only until the site publishable flag is on.",
     }
     (dest_dir / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     (dest_dir / "PROVENANCE.md").write_text(
@@ -133,7 +156,8 @@ def promote(args: argparse.Namespace, decision: dict) -> dict:
         f"Site file: `{dest_file.name}`\n\n"
         f"SHA-256: `{sha}`\n\n"
         "Status: validated draft. published=false. ready_for_publication=false. "
-        "Human review is still pending. This is not a live site import.\n",
+        "Human review is still pending. This is not a live site import.\n"
+        "Staging types stay draft only until the site publishable flag is on.\n",
         encoding="utf-8",
     )
     decision["destination"] = str(dest_dir)

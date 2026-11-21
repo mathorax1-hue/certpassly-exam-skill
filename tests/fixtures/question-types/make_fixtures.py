@@ -54,10 +54,11 @@ def grid_images(headers, rows, key, col_x, text_x=40, row_h=64, top=110):
         for i, (text, k) in enumerate(zip(rows, key)):
             y = top + i * row_h
             d.text((text_x, y), text, fill='black', font=font(20))
+            picked = k if isinstance(k, (list, tuple)) else [k]
             for j, x in enumerate(col_x):
                 cy = y + 13
                 d.ellipse((x - 10, cy - 10, x + 10, cy + 10), outline=RADIO, width=2)
-                if marked and j == k:
+                if marked and j in picked:
                     d.ellipse((x - 5, cy - 5, x + 5, cy + 5), fill='black')
                     d.rectangle((x - 17, cy - 17, x + 17, cy + 17), outline='black', width=3)
         out.append(im)
@@ -77,6 +78,16 @@ def matrix_images(spec):
     rows = [r['text'] for r in spec['rows']]
     cols = spec['columns']
     key = [cols.index(r['answer']) for r in spec['rows']]
+    return grid_images(cols, rows, key, [640, 770, 900], text_x=40)
+
+
+def multi_matrix_images(spec):
+    rows = [r['text'] for r in spec['rows']]
+    cols = spec['columns']
+    key = []
+    for r in spec['rows']:
+        ans = r['answer'] if isinstance(r['answer'], (list, tuple)) else [r['answer']]
+        key.append([cols.index(a) for a in ans])
     return grid_images(cols, rows, key, [640, 770, 900], text_x=40)
 
 
@@ -229,6 +240,42 @@ SPEC = [
     {'type': None, 'expect_hold': 'ordering answer does not use every step',
      'stem': ['Arrange the three steps you need in the correct order.'],
      'options': ['Plan', 'Build', 'Wait', 'Test'], 'answer': 'A, B, D'},
+    {'type': 'multi_select_matrix',
+     'stem': ['HOTSPOT -', 'For each requirement, select all services that apply.',
+              'You may select more than one column.'],
+     'columns': ['Storage', 'Compute', 'Network'],
+     'rows': [{'text': 'Run a batch job every night.', 'answer': ['Compute']},
+              {'text': 'Keep backup copies of files and serve them.', 'answer': ['Storage', 'Network']},
+              {'text': 'Connect two office sites.', 'answer': ['Network']}]},
+    {'type': 'text_cloze',
+     'stem': ['Type the missing word in each blank.',
+              'A ______ stores objects in buckets.',
+              'A ______ forwards packets between networks.'],
+     'answer': '1. object 2. router'},
+    {'type': 'short_text',
+     'stem': ['Type a short answer in the box.',
+              'What protocol assigns addresses automatically?'],
+     'answer': 'DHCP (also accept: Dynamic Host Configuration Protocol)'},
+    {'type': 'numeric',
+     'stem': ['Enter the number. The accepted tolerance is 0.5. The unit is ms.',
+              'A signal takes 10 ms to travel the wire. What is the delay?'],
+     'answer': '10 ms'},
+    {'type': None, 'expect_hold': 'does not give a value for every blank',
+     'stem': ['Type the missing word in each blank.',
+              'A ______ stores objects.',
+              'A ______ forwards packets.'],
+     'answer': '1. object'},
+    {'type': None, 'expect_hold': 'no number in the answer line',
+     'stem': ['Enter the number.', 'What is the delay?'],
+     'answer': 'about ten'},
+    {'type': None, 'expect_hold': 'no answer in the PDF',
+     'stem': ['Type a short answer in the box.', 'What is the name of the protocol?'],
+     'answer': ''},
+    {'type': None, 'expect_hold': 'answer key is not certain',
+     'stem': ['HOTSPOT -', 'For each requirement, select all services that apply.'],
+     'columns': ['Storage', 'Compute', 'Network'],
+     'rows': [{'text': 'Run a batch job every night.', 'answer': ['Compute']},
+              {'text': 'Keep backup copies of files.', 'answer': []}]},
 ]
 
 
@@ -253,6 +300,25 @@ def truth_for(i, s):
         t['rows'] = [r['text'] for r in s['rows']]
         t['columns'] = s['columns']
         t['answer_key'] = {'r%d' % (j + 1): 'c%d' % (s['columns'].index(r['answer']) + 1) for j, r in enumerate(s['rows'])}
+    elif typ == 'multi_select_matrix':
+        t['rows'] = [r['text'] for r in s['rows']]
+        t['columns'] = s['columns']
+        t['answer_key'] = {
+            'r%d' % (j + 1): ['c%d' % (s['columns'].index(a) + 1) for a in (
+                r['answer'] if isinstance(r['answer'], (list, tuple)) else [r['answer']])]
+            for j, r in enumerate(s['rows'])
+        }
+        t['staging_draft_only'] = True
+    elif typ == 'text_cloze':
+        # two blank sentences after the instruction line
+        t['answer_key'] = {'blank1': 'object', 'blank2': 'router'}
+        t['staging_draft_only'] = True
+    elif typ == 'short_text':
+        t['answer_key'] = {'accepted': ['DHCP', 'Dynamic Host Configuration Protocol'], 'match': 'text'}
+        t['staging_draft_only'] = True
+    elif typ == 'numeric':
+        t['answer_key'] = {'value': '10', 'unit': 'ms', 'tolerance': '0.5', 'tolerance_type': 'absolute'}
+        t['staging_draft_only'] = True
     elif typ in ('inline_dropdown', 'multi_blank_dropdown'):
         segs = []
         key = {}
@@ -322,6 +388,8 @@ def build(out_dir):
             q_img, a_img = yes_no_images(s)
         elif typ == 'single_choice_matrix':
             q_img, a_img = matrix_images(s)
+        elif typ == 'multi_select_matrix' or (s.get('columns') and s.get('rows') and typ is None):
+            q_img, a_img = multi_matrix_images(s)
         elif typ in ('inline_dropdown', 'multi_blank_dropdown'):
             q_img, a_img = dropdown_images(s)
         elif typ in ('hotspot_single', 'hotspot_multi'):
@@ -346,7 +414,7 @@ def build(out_dir):
         truth.append(truth_for(i, s))
     c.save()
     doc = {'exam_code': EXAM, 'test_only': True, 'never_promote': True,
-           'note': 'TEST FIXTURE. Synthetic questions, one per supported type, plus held cases.',
+           'note': 'TEST FIXTURE. Synthetic questions, one per supported type, plus held cases. Staging types stay draft only.',
            'questions': truth}
     with open(os.path.join(out_dir, 'truth.json'), 'w', encoding='utf-8') as fh:
         json.dump(doc, fh, indent=1)

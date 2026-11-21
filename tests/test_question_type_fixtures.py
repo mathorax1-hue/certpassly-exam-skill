@@ -42,9 +42,16 @@ class FixtureTruthTests(unittest.TestCase):
         types = {q["type"] for q in TRUTH["questions"] if not q.get("held")}
         self.assertEqual(sorted(set(runner.PUBLISHABLE) - types), [])
 
+    def test_every_staging_type_has_a_fixture_marked_draft_only(self):
+        types = {q["type"] for q in TRUTH["questions"] if not q.get("held")}
+        self.assertEqual(sorted(set(runner.STAGING) - types), [])
+        for q in TRUTH["questions"]:
+            if q.get("type") in runner.STAGING and not q.get("held"):
+                self.assertTrue(q.get("staging_draft_only"), q["question_key"])
+
     def test_blocked_and_partial_cases_are_expected_holds(self):
         held = [q for q in TRUTH["questions"] if q.get("held")]
-        self.assertGreaterEqual(len(held), 2)
+        self.assertGreaterEqual(len(held), 6)
         for q in held:
             self.assertTrue(q.get("hold_reason_contains"))
 
@@ -68,6 +75,20 @@ class FixtureTruthTests(unittest.TestCase):
             self.assertTrue(promote.is_test_fixture("QTYPE-FIXTURE", site))
             self.assertTrue(promote.is_test_fixture("OTHER", site))
             self.assertFalse(promote.is_test_fixture("KCNA", None))
+
+    def test_promotion_marks_staging_types_draft_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp) / "site.json"
+            site.write_text(json.dumps({
+                "exam": {"exam_code": "DEMO"},
+                "questions": [
+                    {"question_key": "q001", "type": "single_choice", "tags": []},
+                    {"question_key": "q002", "type": "numeric", "tags": ["staging_draft_only"]},
+                ],
+            }), encoding="utf-8")
+            rows = promote.staging_items(site)
+            self.assertEqual([r["question_key"] for r in rows], ["q002"])
+            self.assertEqual(rows[0]["publication"], "draft_only")
 
 
 def _has_fixture_tools() -> bool:

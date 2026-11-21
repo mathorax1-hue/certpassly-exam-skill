@@ -2,7 +2,7 @@
  "exam_code": "QTYPE-FIXTURE",
  "test_only": true,
  "never_promote": true,
- "note": "TEST FIXTURE. Synthetic questions, one per supported type, plus held cases.",
+ "note": "TEST FIXTURE. Synthetic questions, one per supported type, plus held cases. Staging types stay draft only.",
  "questions": [
   {
    "question_key": "q001",
@@ -273,6 +273,89 @@
    "type": null,
    "held": true,
    "hold_reason_contains": "ordering answer does not use every step"
+  },
+  {
+   "question_key": "q020",
+   "type": "multi_select_matrix",
+   "rows": [
+    "Run a batch job every night.",
+    "Keep backup copies of files and serve them.",
+    "Connect two office sites."
+   ],
+   "columns": [
+    "Storage",
+    "Compute",
+    "Network"
+   ],
+   "answer_key": {
+    "r1": [
+     "c2"
+    ],
+    "r2": [
+     "c1",
+     "c3"
+    ],
+    "r3": [
+     "c3"
+    ]
+   },
+   "staging_draft_only": true
+  },
+  {
+   "question_key": "q021",
+   "type": "text_cloze",
+   "answer_key": {
+    "blank1": "object",
+    "blank2": "router"
+   },
+   "staging_draft_only": true
+  },
+  {
+   "question_key": "q022",
+   "type": "short_text",
+   "answer_key": {
+    "accepted": [
+     "DHCP",
+     "Dynamic Host Configuration Protocol"
+    ],
+    "match": "text"
+   },
+   "staging_draft_only": true
+  },
+  {
+   "question_key": "q023",
+   "type": "numeric",
+   "answer_key": {
+    "value": "10",
+    "unit": "ms",
+    "tolerance": "0.5",
+    "tolerance_type": "absolute"
+   },
+   "staging_draft_only": true
+  },
+  {
+   "question_key": "q024",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "does not give a value for every blank"
+  },
+  {
+   "question_key": "q025",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "no number in the answer line"
+  },
+  {
+   "question_key": "q026",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "no answer in the PDF"
+  },
+  {
+   "question_key": "q027",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "answer key is not certain"
   }
  ]
 }

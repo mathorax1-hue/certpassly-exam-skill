@@ -85,6 +85,8 @@ SETS = {'multiple_select', 'hotspot_multi'}
 PUBLISHABLE = ['single_choice', 'multiple_select', 'true_false', 'image_based_choice', 'scenario_standalone',
                'yes_no_matrix', 'single_choice_matrix', 'inline_dropdown', 'multi_blank_dropdown', 'ordering',
                'matching', 'categorization', 'drag_drop', 'hotspot_single', 'hotspot_multi', 'case_study_group']
+STAGING = ['multi_select_matrix', 'text_cloze', 'short_text', 'numeric']
+STAGING_TAG = 'staging_draft_only'
 
 
 def _first(v):
@@ -107,6 +109,18 @@ def _keyed(key):
     return {}
 
 
+def _norm_text(s) -> str:
+    return ' '.join(str(s).split()).lower()
+
+
+def _as_list(v):
+    if isinstance(v, list):
+        return v
+    if v is None:
+        return []
+    return [v]
+
+
 def grade(qtype: str, key, response) -> bool:
     """Python mirror of the sandbox SiteFormatGrader (all or nothing)."""
     if qtype in SINGLE:
@@ -117,9 +131,42 @@ def grade(qtype: str, key, response) -> bool:
         a = sorted(str(x) for x in (key if isinstance(key, list) else [key]))
         b = sorted(str(x) for x in (got if isinstance(got, list) else [got]) if not isinstance(x, (list, dict)))
         return bool(a) and a == b
+    if qtype == 'short_text':
+        accepted = (key or {}).get('accepted') if isinstance(key, dict) else key
+        got = response.get('value', response) if isinstance(response, dict) else response
+        return any(_norm_text(a) == _norm_text(got) and _norm_text(got) != '' for a in (accepted or []))
+    if qtype == 'numeric':
+        got = response.get('value', response) if isinstance(response, dict) else response
+        try:
+            got_n = float(str(got).split()[0])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if isinstance(key, dict) and key.get('range'):
+            lo, hi = (float(key['range'][0]), float(key['range'][1]))
+            return lo <= got_n <= hi
+        try:
+            want = float((key or {}).get('value') if isinstance(key, dict) else key)
+        except (TypeError, ValueError):
+            return False
+        tol = 0.0
+        if isinstance(key, dict) and key.get('tolerance') is not None:
+            tol = float(key['tolerance'])
+            if (key.get('tolerance_type') or 'absolute') == 'relative':
+                tol = abs(want) * tol
+        return abs(got_n - want) <= tol
     resp = _keyed(response)
     if qtype == 'ordering':
         parts = [_same(pos + 1, resp.get(str(item))) for pos, item in enumerate(key)]
+    elif qtype == 'multi_select_matrix':
+        parts = []
+        for k, want in _keyed(key).items():
+            got = resp.get(k)
+            a = sorted(map(str, _as_list(want)))
+            b = sorted(map(str, _as_list(got)))
+            parts.append(bool(a) and a == b)
+    elif qtype == 'text_cloze':
+        parts = [_norm_text(want) == _norm_text(resp.get(k, '')) and _norm_text(want) != ''
+                 for k, want in _keyed(key).items()]
     else:
         parts = [_same(want, resp.get(k)) for k, want in _keyed(key).items()]
     return bool(parts) and all(parts)
@@ -132,6 +179,20 @@ def correct_response(qtype: str, key):
         return [str(x) for x in key]
     if qtype == 'ordering':
         return {str(item): pos + 1 for pos, item in enumerate(key)}
+    if qtype == 'short_text':
+        acc = (key or {}).get('accepted') if isinstance(key, dict) else key
+        return {'value': str((acc or [''])[0])}
+    if qtype == 'numeric':
+        if isinstance(key, dict) and key.get('value') is not None:
+            text = str(key['value'])
+            if key.get('unit'):
+                text = '%s %s' % (text, key['unit'])
+            return {'value': text}
+        if isinstance(key, dict) and key.get('range'):
+            return {'value': str(key['range'][0])}
+        return {'value': str(key)}
+    if qtype == 'multi_select_matrix':
+        return {str(k): list(v) if isinstance(v, list) else [v] for k, v in dict(key).items()}
     if isinstance(key, list):
         return [str(x) for x in key]
     return dict(key)
@@ -148,6 +209,18 @@ def wrong_response(qtype: str, key):
         ks = list(right)
         w = dict(right)
         w[ks[0]], w[ks[1]] = right[ks[1]], right[ks[0]]
+        return w
+    if qtype == 'short_text':
+        return {'value': str(right.get('value', '')) + '_wrong'}
+    if qtype == 'numeric':
+        return {'value': '0'}
+    if qtype == 'multi_select_matrix':
+        w = {k: list(v) for k, v in right.items()}
+        first = next(iter(w))
+        if len(w[first]) > 1:
+            w[first] = w[first][1:]
+        else:
+            w[first] = w[first] + ['__other__']
         return w
     if isinstance(right, list):
         return ['__wrong__'] + right[1:]
@@ -181,6 +254,8 @@ def compare(truth: dict, site: dict, fidelity: dict) -> list[dict]:
         key = q['answer']['answer_key']
         if key != t['answer_key']:
             problems.append('answer key %s, expected %s' % (json.dumps(key), json.dumps(t['answer_key'])))
+        if t.get('staging_draft_only') and STAGING_TAG not in (q.get('tags') or []):
+            problems.append('staging type is missing the %s tag' % STAGING_TAG)
         L = q['learner']
         inter = L.get('interaction') or {}
         if 'choices' in t and [norm(plain(c)) for c in L.get('choices') or []] != t['choices']:

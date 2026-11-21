@@ -280,6 +280,18 @@ function correctResponseFor(array $q): array
 
         return $resp;
     }
+    if ($type === 'short_text') {
+        $accepted = is_array($key) && isset($key['accepted']) ? $key['accepted'] : (array) $key;
+
+        return ['value' => (string) ($accepted[0] ?? '')];
+    }
+    if ($type === 'numeric') {
+        $value = is_array($key) && ! array_is_list($key) ? ($key['value'] ?? ($key['range'][0] ?? '')) : $key;
+        $unit = is_array($key) ? (string) ($key['unit'] ?? '') : '';
+        $text = trim((string) $value.($unit !== '' ? ' '.$unit : ''));
+
+        return ['value' => $text];
+    }
     if (is_string($key) || is_int($key)) {
         return ['value' => (string) $key];
     }
@@ -332,6 +344,20 @@ function wrongResponseFor(array $q, array $right): array
         [$a, $b] = [$keys[0], $keys[1]];
         $wrong[$a] = $right[$b];
         $wrong[$b] = $right[$a];
+
+        return $wrong;
+    }
+    if ($type === 'multi_select_matrix') {
+        $first = $keys[0] ?? null;
+        if ($first === null) {
+            return ['value' => '__wrong__'];
+        }
+        $vals = (array) $right[$first];
+        if (count($vals) > 1) {
+            $wrong[$first] = array_slice($vals, 1);
+        } else {
+            $wrong[$first] = array_merge($vals, ['__wrong__']);
+        }
 
         return $wrong;
     }
@@ -437,6 +463,41 @@ function keyReferenceErrors(array $q): array
             }
             if (count((array) $key) !== count($rows)) {
                 $errs[] = 'not every grid row has an answer';
+            }
+            break;
+        case 'multi_select_matrix':
+            $rows = array_map(fn ($r) => $r['id'], $i['matrix']['rows'] ?? []);
+            $cols = array_map(fn ($c) => $c['id'], $i['matrix']['columns'] ?? []);
+            foreach ((array) $key as $r => $c) {
+                $vals = is_array($c) ? $c : [$c];
+                if (! $in($r, $rows) || $vals === [] || array_filter($vals, fn ($v) => ! $in($v, $cols)) !== []) {
+                    $errs[] = "row $r has an empty or unknown column list";
+                }
+            }
+            if (count((array) $key) !== count($rows)) {
+                $errs[] = 'not every grid row has an answer';
+            }
+            break;
+        case 'text_cloze':
+            $ids = array_map(fn ($b) => (string) $b['id'], $i['cloze']['blanks'] ?? []);
+            foreach ((array) $key as $b => $v) {
+                if (! $in($b, $ids) || ! is_string($v) || trim($v) === '') {
+                    $errs[] = "blank $b is missing a typed value";
+                }
+            }
+            if (count((array) $key) !== count($ids)) {
+                $errs[] = 'not every cloze blank has an answer';
+            }
+            break;
+        case 'short_text':
+            $accepted = is_array($key) && isset($key['accepted']) ? $key['accepted'] : (array) $key;
+            if (! is_array($accepted) || $accepted === [] || array_filter($accepted, fn ($a) => ! is_string($a) || trim($a) === '') !== []) {
+                $errs[] = 'short_text key needs a list of accepted answers';
+            }
+            break;
+        case 'numeric':
+            if (! is_array($key) || (! isset($key['value']) && ! isset($key['range']))) {
+                $errs[] = 'numeric key needs a value or a range';
             }
             break;
         case 'inline_dropdown':
