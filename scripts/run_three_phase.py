@@ -5,12 +5,14 @@ Phase 1: pinned upstream technical stages (no AI, no web).
 Phase 2: research worklist, plus official-source capture only when a URL is already known and --capture-official is set.
 Phase 3: domain mapping, content gate, required local site importer gate before promotion, optional promotion.
 
-Prints a public-safe counts summary only.
+Prints a public-safe counts summary only. Held reasons and question text stay
+in the raw-exam reports, not in the printed summary.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,11 +20,25 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SKILL_ROOT = HERE.parent
 
+PRIVATE_LOG: Path | None = None
+
+
+def run_cmd(cmd: list[str], cwd: Path | None = None, allowed: tuple[int, ...] = (0,)) -> int:
+    if PRIVATE_LOG is not None:
+        PRIVATE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with PRIVATE_LOG.open("a", encoding="utf-8") as fh:
+            fh.write("$ %s\n" % " ".join(str(c) for c in cmd))
+            result = subprocess.run(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, check=False)
+    else:
+        result = subprocess.run(cmd, cwd=cwd, check=False)
+    if result.returncode not in allowed:
+        print("run_three_phase_failed exit=%s" % result.returncode)
+        raise SystemExit(result.returncode)
+    return result.returncode
+
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
-    result = subprocess.run(cmd, cwd=cwd, check=False)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    run_cmd(cmd, cwd=cwd, allowed=(0,))
 
 
 def site_file(workspace: Path, exam: str) -> Path:
@@ -52,8 +68,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--sandbox", type=Path, help="Site import sandbox (copy of a3009daa5). Optional.")
     ap.add_argument("--capture-official", action="store_true")
     ap.add_argument("--promote", action="store_true")
+    ap.add_argument(
+        "--private-log",
+        type=Path,
+        help="Capture child command output here and print only counts. Used on the public runner.",
+    )
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args(argv)
+    global PRIVATE_LOG
+    env_log = (os.environ.get("CERTPASSLY_PRIVATE_LOG") or "").strip()
+    if args.private_log:
+        PRIVATE_LOG = Path(args.private_log).resolve()
+    elif env_log:
+        PRIVATE_LOG = Path(env_log).resolve()
+    else:
+        PRIVATE_LOG = None
     ws = args.workspace.resolve()
     exam = args.exam
     if args.raw_dir:
@@ -79,21 +108,19 @@ def main(argv: list[str] | None = None) -> int:
     run([args.python, str(HERE / "build_research_worklist.py"),
          "--exam", exam, "--export-dir", str(exp), "--output", str(worklist)])
     domain_report = reports / "domain-mapping.json"
-    subprocess.run([args.python, str(HERE / "map_exam_domains.py"),
-                    "--site-file", str(site), "--output", str(domain_report)]
-                   + (["--raw-dir", str(args.raw_dir)] if args.raw_dir else [])
-                   + (["--workspace", str(ws)] if ws else []), check=False)
+    run_cmd([args.python, str(HERE / "map_exam_domains.py"),
+             "--site-file", str(site), "--output", str(domain_report)]
+            + (["--raw-dir", str(args.raw_dir)] if args.raw_dir else [])
+            + (["--workspace", str(ws)] if ws else []), allowed=(0, 2))
     content = reports / "content-gate.json"
     # Content gate is allowed to exit 2; we still write promotion decision.
-    subprocess.run([args.python, str(HERE / "check_content_gate.py"),
-                    "--site-file", str(site), "--output", str(content)], check=False)
+    run_cmd([args.python, str(HERE / "check_content_gate.py"),
+             "--site-file", str(site), "--output", str(content)], allowed=(0, 2))
     import_report = reports / "import-gate.json"
     if args.sandbox:
-        result = subprocess.run([args.python, str(HERE / "run_site_import_gate.py"),
-                                 "--sandbox", str(args.sandbox), "--site-file", str(site),
-                                 "--output", str(import_report)], check=False)
-        if result.returncode not in (0, 2):
-            return result.returncode
+        run_cmd([args.python, str(HERE / "run_site_import_gate.py"),
+                 "--sandbox", str(args.sandbox), "--site-file", str(site),
+                 "--output", str(import_report)], allowed=(0, 2))
     promote_out = reports / "promotion.json"
     promote_cmd = [args.python, str(HERE / "promote_ready_exam.py"),
                    "--exam", exam, "--site-file", str(site),
@@ -106,16 +133,16 @@ def main(argv: list[str] | None = None) -> int:
         promote_cmd.extend(["--import-gate", str(import_report)])
     if args.promote:
         promote_cmd.append("--promote")
-    subprocess.run(promote_cmd, check=False)
+    run_cmd(promote_cmd, allowed=(0, 2))
     work = json.loads(worklist.read_text(encoding="utf-8"))
     content_data = json.loads(content.read_text(encoding="utf-8")) if content.is_file() else {}
     promo = json.loads(promote_out.read_text(encoding="utf-8")) if promote_out.is_file() else {}
     imported = json.loads(import_report.read_text(encoding="utf-8")) if import_report.is_file() else {}
+    blockers = promo.get("blockers") or []
     summary = {
         "exam_code": exam,
         "exported_question_count": work.get("exported_question_count"),
         "held_count": len(work.get("held") or []),
-        "held": work.get("held") or [],
         "answer_not_found_count": len(work.get("answer_not_found") or []),
         "missing_exam_facts_count": len(work.get("missing_exam_facts") or []),
         "content_gate": content_data.get("status"),
@@ -125,11 +152,13 @@ def main(argv: list[str] | None = None) -> int:
         "import_created": imported.get("created_count"),
         "import_rejected": imported.get("rejected_count"),
         "promotion": promo.get("status"),
-        "promotion_blockers": promo.get("blockers") or [],
-        "reports_dir": str(reports),
+        "promotion_blocker_count": len(blockers),
+        "promotion_blockers": blockers,
     }
     (reports / "public-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(summary, indent=2))
+    # Printed log: counts and pass/fail only. No held reasons, stems, or paths.
+    printed = {k: v for k, v in summary.items() if k != "promotion_blockers"}
+    print(json.dumps(printed, indent=2))
     return 0
 
 

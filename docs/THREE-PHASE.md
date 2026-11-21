@@ -5,7 +5,7 @@ This is the permanent path from an owner PDF to a CertPassly site v2 draft. Scri
 ## Repository roles
 
 1. Public `mathorax1-hue/certpassly-exam-skill` holds shared scripts, tests and rules only. No owner PDFs, keys, OCR text or run outputs.
-2. Public `mathorax1-hue/exam` is the working Actions repo. It checks out this skill and the pinned upstream pipeline. Public logs may contain counts and IDs only. Real owner exams are dispatched from private raw-exam so question text never appears in public logs.
+2. Public `mathorax1-hue/exam` is the working Actions repo. The heavy job runs there so minutes bill to the public repository. It checks out private raw-exam with a PAT secret stored in exam, this skill, and the pinned upstream pipeline. Public logs print only counts and pass/fail. A leak-check step scans the captured run log and the published job log for question text, PDF media names, and secret prefixes, and fails the run if a match is found. It never prints the matching text. Start a run from private raw-exam (default) or by owner dispatch on exam. There is no pull_request trigger.
 3. Private `mathorax1-hue/raw-exam` stores the owner PDF (Git LFS), rights statement, extract, fidelity reports, research notes and drafts.
 4. Private `mathorax1-hue/ready-exams` receives only drafts that passed every gate, each with a provenance note naming the raw-exam commit. Auto promotion is off.
 
@@ -61,7 +61,7 @@ Stdout is a counts summary only.
 
 ## Upstream patch applied in Actions
 
-The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies every `patches/upstream/v1.3.0-*.patch` in name order:
+The public three-phase workflow (and the disabled-by-default private fallback) checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies every `patches/upstream/v1.3.0-*.patch` in name order:
 
 1. `v1.3.0-lead-ligature-complete-words.patch` stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`.
 2. `v1.3.0-ocr-retry-review-sheet.patch` adds the OCR retry pass, the review sheet, and owner-corrections support.
