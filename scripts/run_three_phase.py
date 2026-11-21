@@ -3,7 +3,7 @@
 
 Phase 1: pinned upstream technical stages (no AI, no web).
 Phase 2: research worklist, plus official-source capture only when a URL is already known and --capture-official is set.
-Phase 3: content gate, optional site importer gate, optional promotion.
+Phase 3: domain mapping, content gate, required local site importer gate before promotion, optional promotion.
 
 Prints a public-safe counts summary only.
 """
@@ -78,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     worklist = reports / "research-worklist.json"
     run([args.python, str(HERE / "build_research_worklist.py"),
          "--exam", exam, "--export-dir", str(exp), "--output", str(worklist)])
+    domain_report = reports / "domain-mapping.json"
+    subprocess.run([args.python, str(HERE / "map_exam_domains.py"),
+                    "--site-file", str(site), "--output", str(domain_report)]
+                   + (["--raw-dir", str(args.raw_dir)] if args.raw_dir else [])
+                   + (["--workspace", str(ws)] if ws else []), check=False)
     content = reports / "content-gate.json"
     # Content gate is allowed to exit 2; we still write promotion decision.
     subprocess.run([args.python, str(HERE / "check_content_gate.py"),
@@ -95,6 +100,7 @@ def main(argv: list[str] | None = None) -> int:
                    "--ready-root", str(args.ready_root or (ws / "ready-exams-dry")),
                    "--raw-commit", args.raw_commit or ("0" * 40),
                    "--worklist", str(worklist), "--content-gate", str(content),
+                   "--domain-gate", str(domain_report),
                    "--output", str(promote_out)]
     if import_report.is_file():
         promote_cmd.extend(["--import-gate", str(import_report)])
@@ -113,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         "answer_not_found_count": len(work.get("answer_not_found") or []),
         "missing_exam_facts_count": len(work.get("missing_exam_facts") or []),
         "content_gate": content_data.get("status"),
+        "domain_mapping": (json.loads(domain_report.read_text(encoding="utf-8")) if domain_report.is_file() else {}).get("status"),
+        "domain_unmapped_count": (json.loads(domain_report.read_text(encoding="utf-8")) if domain_report.is_file() else {}).get("unmapped_count"),
         "import_gate": imported.get("status"),
         "import_created": imported.get("created_count"),
         "import_rejected": imported.get("rejected_count"),

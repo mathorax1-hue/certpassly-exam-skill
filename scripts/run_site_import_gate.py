@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -40,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.output.is_file():
         data = json.loads(args.output.read_text(encoding="utf-8"))
+        sha = hashlib.sha256(args.site_file.read_bytes()).hexdigest()
+        data["site_file"] = str(args.site_file)
+        data["site_file_sha256"] = sha
+        data["site_file_bytes"] = args.site_file.stat().st_size
+        args.output.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({
             "status": data.get("status"),
             "exam_code": data.get("exam_code"),
@@ -47,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             "draft_count": data.get("draft_count"),
             "rejected_count": data.get("rejected_count"),
             "held_count": data.get("held_count"),
+            "site_file_sha256": sha,
         }))
     return 0 if result.returncode == 0 else 2
 

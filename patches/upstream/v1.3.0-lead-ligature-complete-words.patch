@@ -1,0 +1,196 @@
+From 851b8dfb1a05835da1f923fbe85c8d361d1ed67f Mon Sep 17 00:00:00 2001
+From: "mathorax.com" <mathorax1@gmail.com>
+Date: Sat, 21 Nov 2026 16:40:37 +0500
+Subject: [PATCH] Do not prefix fi/fl ligatures onto complete words
+
+lead() treated any lowercase token as a lost leading ligature when
+ligature+token was in ligature_words.txt. That turned replace into
+fireplace and sh into fish, so the fidelity gate held questions
+whose PDF text was already correct. Protect complete words, expand
+typographic ligature code points consistently, and keep the
+coverage gate strict.
+---
+ config/ligature_words.txt | 31 ++++++++++++++++++++++++++
+ scripts/fidelity.py       |  3 ++-
+ scripts/text_repair.py    | 46 +++++++++++++++++++++++++++++++++++----
+ tests/test_v120_real.py   | 10 ++++++++-
+ 4 files changed, 84 insertions(+), 6 deletions(-)
+
+diff --git a/config/ligature_words.txt b/config/ligature_words.txt
+index 188c83e..1b7e5b0 100644
+--- a/config/ligature_words.txt
++++ b/config/ligature_words.txt
+@@ -3457,3 +3457,34 @@ species
+ tracked
+ tracking
+ true
++
++# Tokens that already read as complete words. lead() must never prefix
++# a ligature onto these, even when ligature+token is itself a ligature word
++# (fireplace = fi + replace, fish = fi + sh). Includes common inflections.
++[complete_words]
++ash
++ashes
++aunt
++ax
++elder
++elders
++lip
++lips
++nest
++nests
++oats
++owed
++owing
++replace
++replaced
++replaces
++replacing
++sh
++shy
++sting
++stings
++stung
++utter
++utters
++uttered
++uttering
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 02daaa4..4f8509b 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
+ import paths
+ import site_settings
+ import extract_owner_pdf as X
++import text_repair
+ 
+ DEFAULT_TOKEN = r'[A-Za-z0-9]+'
+ 
+@@ -87,7 +88,7 @@ def make_deny(cfg=None):
+ def tokenize(text, cfg=None):
+     cfg = cfg or {}
+     pat = cfg.get('token_pattern') or DEFAULT_TOKEN
+-    raw = text or ''
++    raw = text_repair.expand_typographic_ligatures(text or '')
+     if not cfg.get('case_sensitive'):
+         raw = raw.lower()
+     return re.findall(pat, raw)
+diff --git a/scripts/text_repair.py b/scripts/text_repair.py
+index 1b411cb..23cc69a 100644
+--- a/scripts/text_repair.py
++++ b/scripts/text_repair.py
+@@ -13,6 +13,27 @@ import os, re
+ LIGS = ('ffi', 'ffl', 'fi', 'fl', 'ff')
+ _DATA = None
+ _KNOWN = set()
++_COMPLETE = set()
++
++# Typographic ligatures some PDF text layers emit as single code points.
++TYPING_LIGATURES = {
++    "ﬀ": "ff",
++    "ﬁ": "fi",
++    "ﬂ": "fl",
++    "ﬃ": "ffi",
++    "ﬄ": "ffl",
++}
++
++
++def expand_typographic_ligatures(text: str) -> str:
++    """Expand fi/fl/ff typographic ligatures to ASCII letters. No words added or dropped."""
++    raw = text or ""
++    if not raw:
++        return raw
++    for lig, letters in TYPING_LIGATURES.items():
++        if lig in raw:
++            raw = raw.replace(lig, letters)
++    return raw
+ 
+ 
+ def _load(path=None):
+@@ -20,7 +41,7 @@ def _load(path=None):
+     if _DATA is not None and path is None:
+         return _DATA
+     path = path or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'ligature_words.txt')
+-    sec, lig, keep, known = None, set(), set(), set()
++    sec, lig, keep, known, complete = None, set(), set(), set(), set()
+     if os.path.exists(path):
+         for line in open(path, encoding='utf-8'):
+             line = line.strip()
+@@ -29,9 +50,17 @@ def _load(path=None):
+             if line.startswith('['):
+                 sec = line.strip('[]')
+                 continue
+-            (lig if sec == 'ligature_words' else keep if sec == 'keep_short' else known if sec == 'known_words' else set()).add(line.lower())
+-    global _KNOWN
++            target = {
++                "ligature_words": lig,
++                "keep_short": keep,
++                "known_words": known,
++                "complete_words": complete,
++            }.get(sec)
++            if target is not None:
++                target.add(line.lower())
++    global _KNOWN, _COMPLETE
+     _KNOWN = known
++    _COMPLETE = complete
+     _DATA = (lig, keep)
+     return _DATA
+ 
+@@ -48,11 +77,20 @@ def _join(a: str, b: str, lig_words):
+     return None
+ 
+ 
++def _protected_token(token: str, lig_words, keep) -> bool:
++    """True when a token already reads as a complete word and must not get a leading ligature."""
++    tl = (token or "").lower()
++    if not tl:
++        return True
++    return tl in keep or tl in lig_words or tl in _KNOWN or tl in _COMPLETE
++
++
+ def repair(text: str, data=None):
+     """Return (fixed_text, [(before, after), ...])."""
+     lig_words, keep = data or _load()
+     if not text or not lig_words:
+         return text, []
++    text = expand_typographic_ligatures(text)
+     changes = []
+ 
+     # Glyph lost inside a word: "De ne", "O ce", "con gure". Second part is lower case.
+@@ -76,7 +114,7 @@ def repair(text: str, data=None):
+ 
+     def lead(m):
+         t = m.group(1)
+-        if t.lower() in keep or t.lower() in lig_words:
++        if _protected_token(t, lig_words, keep):
+             return t
+         j = _join('', t, lig_words)
+         if j:
+diff --git a/tests/test_v120_real.py b/tests/test_v120_real.py
+index 4ff8788..a470c10 100644
+--- a/tests/test_v120_real.py
++++ b/tests/test_v120_real.py
+@@ -102,10 +102,18 @@ class LostLigatureRepair(unittest.TestCase):
+             self.assertEqual(got,want,src); self.assertTrue(ch,src)
+ 
+     def test_real_words_are_left_alone(self):
+-        for src in ['a re is lit','do the work now','the risk is low','Yes or No','use SSO on the app','the best one']:
++        for src in ['a re is lit','do the work now','the risk is low','Yes or No','use SSO on the app','the best one',
++                    'They replace human operations','It replaces default certificates',
++                    'kubectl replace deployment/my-app','Add a build.sh script.',
++                    'the shy cat','the nest is empty']:
+             got,ch=self.T.repair(src)
+             self.assertEqual(got,src); self.assertEqual(ch,[])
+ 
++
++    def test_typographic_ligatures_expand_consistently(self):
++        raw = "A speci\ufb01c \ufb01le and a \ufb02ow"
++        self.assertEqual(self.T.expand_typographic_ligatures(raw), "A specific file and a flow")
++
+     def test_extract_logs_each_repair_in_cleanups(self):
+         import extract_owner_pdf as E, site_settings
+         xml=_xml([(1,_t(50,'QUESTION 1')+_t(70,'Which step comes rst in the work ow?')+_t(90,'A. De ne the scope')+_t(110,'B. Delete les')+_t(130,'Correct Answer: A'))])
+-- 
+2.47.3
+

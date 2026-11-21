@@ -34,15 +34,18 @@ This lists held items, `answer_not_found` questions, and exam facts that still l
 
 ```
 python scripts/check_content_gate.py --site-file /path/work/out/CODE/CODE.site-format.v2.json --output /path/work/out/CODE/phase-reports/content-gate.json
+python scripts/map_exam_domains.py --site-file /path/work/out/CODE/CODE.site-format.v2.json --raw-dir /path/raw-exam/exams/CODE --output /path/work/out/CODE/phase-reports/domain-mapping.json
 python scripts/run_site_import_gate.py --sandbox /path/import-sandbox --site-file /path/work/out/CODE/CODE.site-format.v2.json --output /path/work/out/CODE/phase-reports/import-gate.json
-python scripts/promote_ready_exam.py --exam CODE --site-file /path/work/out/CODE/CODE.site-format.v2.json --ready-root /path/ready-exams --raw-commit RAW_SHA --worklist ... --content-gate ... --import-gate ... --output ... --promote
+python scripts/promote_ready_exam.py --exam CODE --site-file /path/work/out/CODE/CODE.site-format.v2.json --ready-root /path/ready-exams --raw-commit RAW_SHA --worklist ... --content-gate ... --domain-gate ... --import-gate ... --output ... --promote
 ```
 
 Content writing is a documented hook. The gate checks authored explanations and page prose only, for typographic dashes, emoji, seller or competitor names, and review markup. Missing authored content blocks promotion.
 
-The site import gate uses the real website importer from a throwaway copy of site commit `a3009daa5758a4401ceadd9cf765d8a36bff22bc`. That sandbox uses sqlite only, with `SITE_FORMAT_EXAM_V2=true` in its own `.env`. It must never use port 3306, the 8330 audit, production, or the original worktree. The importer command is `site-format:import` / `SiteFormatImporter`. Every exported question must be saved as a draft. A few questions are graded per type with `SiteFormatGrader`. This gate is required before promotion. GitHub Actions should skip it unless a private sandbox path is provided, because the website code does not belong in the public exam repo.
+Domain mapping uses only an official domain list that is already saved with a URL, sha256 and a verbatim quote (for example `official/domains.csv` plus `official/receipt.json`). If that list is not saved, every question is kept and flagged `domain_unmapped`, and promotion is blocked. The script never guesses a domain name silently.
 
-Promotion still requires `--promote` after every gate passes, including zero held items and official exam facts. Destination files include `provenance.json` and `PROVENANCE.md` with the raw-exam commit. `published` and `ready_for_publication` stay false.
+The site import gate is a required local pre-promotion step. It is not run in GitHub Actions, because the website code must not be stored in the user's GitHub repositories. Run it on a throwaway copy of site commit `a3009daa5758a4401ceadd9cf765d8a36bff22bc`. That sandbox uses sqlite only, with `SITE_FORMAT_EXAM_V2=true` in its own `.env`. It must never use port 3306, the 8330 audit, production, or the original worktree. The importer command is `site-format:import` / `SiteFormatImporter`. Every exported question must be saved as a draft. A few questions are graded per type with `SiteFormatGrader`. The import-gate report must include the sha256 of the exact site v2 file being promoted. `promote_ready_exam.py` refuses promotion if the report is missing, is not `passed`, or the sha256 does not match that file.
+
+Promotion still requires `--promote` after every gate passes, including zero held items, official exam facts, a passing local import-gate report with a matching sha256, and no `domain_unmapped` questions. Destination files include `provenance.json` and `PROVENANCE.md` with the raw-exam commit. `published` and `ready_for_publication` stay false.
 
 ## One-shot private runner
 
@@ -51,3 +54,7 @@ python scripts/run_three_phase.py --exam CODE --workspace /path/work --upstream 
 ```
 
 Stdout is a counts summary only.
+
+## Upstream patch applied in Actions
+
+The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd88caeffa90952b7e000d3`) and then applies `patches/upstream/v1.3.0-lead-ligature-complete-words.patch`. That patch stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`. The fidelity coverage gate stays strict. The same patch is bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.

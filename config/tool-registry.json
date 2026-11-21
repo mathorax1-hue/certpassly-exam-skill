@@ -240,6 +240,17 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "map_exam_domains",
+      "path": "scripts/map_exam_domains.py",
+      "test": "tests/test_map_exam_domains.py",
+      "command": "python scripts/map_exam_domains.py --site-file PRIVATE/exam.site-format.v2.json --raw-dir PRIVATE/exams/CODE --output PRIVATE/domain-mapping.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Writes a domain mapping report; updates the site file only when an official domain list with URL, sha256 and quote is already saved; never guesses silently; no network and no AI",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }

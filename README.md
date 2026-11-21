@@ -82,3 +82,7 @@ Read [`SKILL.md`](SKILL.md), [`AGENTS.md`](AGENTS.md), [`docs/OPERATIONS.md`](do
 ## Future work
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md). The current foundation does **not** include a verified CertPassly live-site importer, automatic document-based answer reasoning, private GitHub Actions dispatch, a cloud database, or a complete release-authority model. Those require controlled integration and tests.
+
+## Local site import gate (required before promotion)
+
+GitHub Actions does not run the real website importer, because the website code must not be stored in these GitHub repositories. Before promotion, run `scripts/run_site_import_gate.py` against a throwaway sqlite sandbox and keep the import-gate report. `scripts/promote_ready_exam.py` refuses to promote unless that report has `status=passed` and its `site_file_sha256` matches the site v2 file being promoted. Questions without a saved official domain list are flagged `domain_unmapped` and also block promotion.

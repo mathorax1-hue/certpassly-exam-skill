@@ -15,7 +15,7 @@ spec.loader.exec_module(tool)
 COMMIT = "a" * 40
 
 
-def write_gates(tmp: Path, *, held=False, content="passed", imported="passed") -> dict:
+def write_gates(tmp: Path, *, held=False, content="passed", imported="passed", domain="mapped", import_sha="auto") -> dict:
     site = tmp / "SYN-100.site-format.v2.json"
     site.write_text(json.dumps({"exam": {"exam_code": "SYN-100"}, "questions": []}), encoding="utf-8")
     work = {
@@ -25,7 +25,19 @@ def write_gates(tmp: Path, *, held=False, content="passed", imported="passed") -
     }
     (tmp / "worklist.json").write_text(json.dumps(work), encoding="utf-8")
     (tmp / "content.json").write_text(json.dumps({"status": content}), encoding="utf-8")
-    (tmp / "import.json").write_text(json.dumps({"status": imported, "rejected": []}), encoding="utf-8")
+    import hashlib
+    sha = hashlib.sha256(site.read_bytes()).hexdigest() if import_sha == "auto" else import_sha
+    (tmp / "import.json").write_text(json.dumps({
+        "status": imported,
+        "rejected": [],
+        "site_file_sha256": sha,
+    }), encoding="utf-8")
+    unmapped = 0 if domain == "mapped" else 1
+    (tmp / "domains.json").write_text(json.dumps({
+        "status": domain,
+        "unmapped_count": unmapped,
+        "promotion_blocker": domain != "mapped",
+    }), encoding="utf-8")
     ready = tmp / "ready"
     ready.mkdir()
     return {
@@ -33,6 +45,7 @@ def write_gates(tmp: Path, *, held=False, content="passed", imported="passed") -
         "work": tmp / "worklist.json",
         "content": tmp / "content.json",
         "imported": tmp / "import.json",
+        "domains": tmp / "domains.json",
         "ready": ready,
         "out": tmp / "promo.json",
     }
@@ -48,6 +61,7 @@ class PromoteTests(unittest.TestCase):
             "--worklist", str(paths["work"]),
             "--content-gate", str(paths["content"]),
             "--import-gate", str(paths["imported"]),
+            "--domain-gate", str(paths["domains"]),
             "--output", str(paths["out"]),
         ] + (["--promote"] if promote else [])
 
@@ -69,6 +83,23 @@ class PromoteTests(unittest.TestCase):
             data = json.loads(paths["out"].read_text())
             self.assertGreaterEqual(len(data["blockers"]), 3)
             self.assertFalse(data["published"])
+
+    def test_blocks_when_import_sha_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_gates(Path(tmp), import_sha="b" * 64)
+            rc = tool.main(self._args(paths, promote=True))
+            self.assertEqual(rc, 2)
+            data = json.loads(paths["out"].read_text())
+            self.assertTrue(any("sha256" in b for b in data["blockers"]))
+            self.assertFalse((paths["ready"] / "exams" / "SYN-100").exists())
+
+    def test_blocks_when_domains_are_unmapped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = write_gates(Path(tmp), domain="domain_unmapped")
+            rc = tool.main(self._args(paths, promote=True))
+            self.assertEqual(rc, 2)
+            data = json.loads(paths["out"].read_text())
+            self.assertTrue(any("domain mapping" in b for b in data["blockers"]))
 
     def test_writes_provenance_when_all_gates_pass(self):
         with tempfile.TemporaryDirectory() as tmp:

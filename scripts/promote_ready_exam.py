@@ -31,19 +31,39 @@ def evaluate(args: argparse.Namespace) -> dict:
     worklist = _load(args.worklist)
     content = _load(args.content_gate)
     importer = _load(args.import_gate)
+    domains = _load(args.domain_gate)
     if worklist.get("held"):
         reasons.append(f"held items remain: {len(worklist['held'])}")
     if worklist.get("answer_not_found"):
         reasons.append(f"answer_not_found items remain: {len(worklist['answer_not_found'])}")
     if worklist.get("missing_exam_facts"):
         reasons.append("official exam facts are missing saved URL, sha256 and quote")
+    if domains.get("promotion_blocker") or domains.get("unmapped_count") or (
+        not domains or domains.get("status") in {"domain_unmapped", "no_official_domain_list"}
+    ):
+        if not domains:
+            reasons.append("domain mapping report is missing")
+        else:
+            reasons.append(
+                "domain mapping: %s (%s unmapped)"
+                % (domains.get("status") or "missing", domains.get("unmapped_count") or 0)
+            )
     if content.get("status") in BLOCKING_CONTENT or not content:
         reasons.append(f"content gate: {content.get('status') or 'missing'}")
     if not importer or importer.get("status") != "passed":
         reasons.append(f"site import gate: {(importer or {}).get('status') or 'missing'}")
+    elif not (importer.get("site_file_sha256") or "").strip():
+        reasons.append("site import gate report is missing the site file sha256")
+    elif not args.site_file.is_file():
+        reasons.append("site v2 file is missing")
+    else:
+        site_sha = hashlib.sha256(args.site_file.read_bytes()).hexdigest()
+        report_sha = str(importer.get("site_file_sha256") or "").strip().lower()
+        if report_sha != site_sha:
+            reasons.append("site import gate sha256 does not match the site v2 file")
     if importer and importer.get("rejected"):
         reasons.append(f"importer rejected {len(importer['rejected'])} questions")
-    if not args.site_file.is_file():
+    if not args.site_file.is_file() and "site v2 file is missing" not in reasons:
         reasons.append("site v2 file is missing")
     if not args.raw_commit or len(args.raw_commit) != 40:
         reasons.append("raw-exam commit sha is missing or not a full SHA")
@@ -110,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--worklist", type=Path)
     ap.add_argument("--content-gate", type=Path)
     ap.add_argument("--import-gate", type=Path)
+    ap.add_argument("--domain-gate", type=Path)
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--promote", action="store_true")
     ap.add_argument("--force", action="store_true")
