@@ -1501,7 +1501,7 @@ index 0000000..0aed602
 +    order = [r['id'] for r in layout['regions']]
 +    return sorted(picked, key=order.index), detail
 diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
-index cc249ed..5683b33 100644
+index cc249ed..2715622 100644
 --- a/scripts/build_technical_export.py
 +++ b/scripts/build_technical_export.py
 @@ -34,6 +34,7 @@ import vision_util as V
@@ -1653,7 +1653,7 @@ index cc249ed..5683b33 100644
          idx = letter_indexes(raw, len(keys))
          if not idx:
              return empty_key(typ), False
-@@ -307,8 +376,55 @@ def strip_private(learner):
+@@ -307,8 +376,105 @@ def strip_private(learner):
      return learner
  
  
@@ -1686,6 +1686,56 @@ index cc249ed..5683b33 100644
 +    return item
 +
 +
++def site_question_key(exam_code, key):
++    """Exam-scoped question key for the site file: <exam code>-<pdf key>."""
++    prefix = re.sub(r'[^A-Za-z0-9._-]+', '-', str(exam_code or '').strip()).strip('-') or 'exam'
++    key = str(key)
++    return key if key.startswith(prefix + '-') else '%s-%s' % (prefix, key)
++
++
++BLANK_MARK = '____'
++
++
++def site_inline_dropdown(q):
++    """Site shape for a one-blank inline_dropdown.
++
++    The site renders inline_dropdown with its single-select dropdown component
++    (learner.choices, response {value: index}) and grades it as one value, so a
++    cloze interaction shows an empty select. The sentence goes into the stem
++    with a blank mark, the blank's options become the choices and the key is
++    the chosen option index.
++    """
++    if q.get('type') != 'inline_dropdown':
++        return q
++    learner = dict(q.get('learner') or {})
++    inter = dict(learner.get('interaction') or {})
++    cz = inter.get('cloze') or {}
++    blanks = cz.get('blanks') or []
++    key = (q.get('answer') or {}).get('answer_key')
++    if len(blanks) != 1 or not isinstance(key, dict) or len(key) != 1:
++        return q
++    blank = blanks[0]
++    ids = [o['id'] for o in blank.get('options') or []]
++    want = key.get(blank['id'])
++    if want not in ids:
++        return q
++    sentence = ''.join(s.get('text') if 'blank' not in s else BLANK_MARK for s in cz.get('segments') or [])
++    sentence = re.sub(r'\s+', ' ', sentence).strip()
++    stem = list(learner.get('stem') or [])
++    if sentence:
++        stem.append({'type': 'paragraph', 'content': [{'text': sentence}]})
++    learner['stem'] = stem
++    learner['choices'] = [[{'type': 'paragraph', 'content': [{'text': o.get('text') or ' '}]}]
++                          for o in blank.get('options') or []]
++    inter.pop('cloze', None)
++    if inter:
++        learner['interaction'] = inter
++    else:
++        learner.pop('interaction', None)
++    answer = dict(q['answer'], answer_key=[ids.index(want)])
++    return dict(q, learner=learner, answer=answer)
++
++
 +def _only_reading_reasons(hold):
 +    """True when every hold reason is about reading words (OCR quality or word
 +    coverage), never about the type, the layout or the answer key."""
@@ -1709,7 +1759,7 @@ index cc249ed..5683b33 100644
      hold = {
          'question_key': item.get('question_key'),
          'reason': result['reason'],
-@@ -329,10 +445,11 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
+@@ -329,10 +495,11 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
              key, complete = build_answer_key(typ, item, visual, learner)
              learner = strip_private(learner)
              has_owner_key = bool((item.get('answer_raw') or '').strip()) or complete
@@ -1723,7 +1773,7 @@ index cc249ed..5683b33 100644
                  hold['reason'] = 'answer marks in the image were not reliable enough to set a key'
              else:
                  status = 'owner_key' if has_owner_key else 'answer_not_found'
-@@ -363,6 +480,9 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
+@@ -363,6 +530,9 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
          hold['fidelity'] = gate
          if not gate['ok']:
              hold['reason'] = gate['reason'] or hold['reason']
@@ -1733,7 +1783,7 @@ index cc249ed..5683b33 100644
              # Keep the built question so a later owner-correction path can
              # export it after type and schema checks. The caller still treats
              # a non-None hold as held unless it chooses otherwise.
-@@ -480,6 +600,9 @@ def main(argv=None):
+@@ -480,6 +650,9 @@ def main(argv=None):
      bank_qs = []
      by_type = {}
      fid_rows = []
@@ -1743,7 +1793,7 @@ index cc249ed..5683b33 100644
      for key in sorted(split, key=lambda k: (split[k].get('source_number') or 0, k)):
          item = split[key]
          vis = visual.get(key)
-@@ -492,6 +615,35 @@ def main(argv=None):
+@@ -492,6 +665,35 @@ def main(argv=None):
              split[key] = item
              owner_applied = True
          q, hold, result, gate = export_one(item, vis, ocr_item, exam, domain, min_conf, fid_cfg=fid_cfg, deny=deny)
@@ -1779,6 +1829,19 @@ index cc249ed..5683b33 100644
          if owner_applied:
              rec = OC.build_record(item, correction, out)
              if q is not None and (hold is None or OC.only_ocr_or_coverage_reasons(hold, gate)):
+@@ -638,7 +840,11 @@ def main(argv=None):
+         fid_rows.append(fid_row)
+ 
+     exam_sec = exam_header(row, exam, len(questions))
+-    doc = E.wrap_exam(exam_sec, questions)
++    # The site keeps question_key unique across every exam, so the site file
++    # carries an exam-scoped key (EXAMCODE-q001). Reports keep the PDF key.
++    # inline_dropdown uses the site's single-select dropdown component.
++    doc = E.wrap_exam(exam_sec, [dict(site_inline_dropdown(q), question_key=site_question_key(exam_sec.get('exam_code') or exam, q['question_key']))
++                                 for q in questions])
+     os.makedirs(os.path.join(out, 'export'), exist_ok=True)
+     dest = os.path.join(out, f'{exam}.site-format.v2.json')
+     with open(dest, 'w', encoding='utf-8') as fh:
 diff --git a/scripts/fidelity.py b/scripts/fidelity.py
 index 4f8509b..d05b391 100644
 --- a/scripts/fidelity.py

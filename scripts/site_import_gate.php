@@ -182,6 +182,12 @@ if ($report['valid'] ?? false) {
             $notDraft[] = ['question_key' => $q['question_key'], 'reason' => 'not in database'];
             continue;
         }
+        if ((int) $question->exam_id !== (int) $exam->id) {
+            // question_key is unique across all exams on the site; a key owned by
+            // another exam means this import overwrote that exam's question
+            $notDraft[] = ['question_key' => $q['question_key'], 'reason' => 'question_key belongs to another exam (id '.$question->exam_id.')'];
+            continue;
+        }
         if ($question->status !== 'draft' || $question->published_version_id) {
             $notDraft[] = ['question_key' => $q['question_key'], 'reason' => 'status='.$question->status];
             continue;
@@ -501,6 +507,16 @@ function keyReferenceErrors(array $q): array
             }
             break;
         case 'inline_dropdown':
+            // The site renders inline_dropdown with its single-select dropdown
+            // component (learner.choices, response {value: index}); a cloze
+            // interaction there shows an empty select.
+            $n = count($q['learner']['choices'] ?? []);
+            if ($n < 2) {
+                $errs[] = 'inline_dropdown needs learner.choices (the site dropdown component renders choices, not cloze blanks)';
+            } elseif (! is_array($key) || ! array_is_list($key) || count($key) !== 1 || ! is_numeric($key[0]) || (int) $key[0] < 0 || (int) $key[0] >= $n) {
+                $errs[] = 'inline_dropdown key must be one choice index';
+            }
+            break;
         case 'multi_blank_dropdown':
             $opts = [];
             foreach ($i['cloze']['blanks'] ?? [] as $b) {

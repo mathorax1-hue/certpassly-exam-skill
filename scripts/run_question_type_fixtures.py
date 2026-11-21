@@ -229,13 +229,43 @@ def wrong_response(qtype: str, key):
     return w
 
 
+def cloze_view(q: dict) -> dict:
+    """A one-blank inline_dropdown is exported in the site's single-select shape
+    (sentence in the stem with ____, options as choices, key = option index).
+    Rebuild the cloze view so it compares with the truth file."""
+    L = q.get('learner') or {}
+    if q.get('type') != 'inline_dropdown' or (L.get('interaction') or {}).get('cloze') or not L.get('choices'):
+        return q
+    stem = L.get('stem') or []
+    sentence = plain([stem[-1]]) if stem else ''
+    parts = sentence.split('____')
+    segs = []
+    for i, part in enumerate(parts):
+        if part:
+            segs.append({'text': part})
+        if i < len(parts) - 1:
+            segs.append({'blank': 'blank1'})
+    opts = [{'id': 'blank1_o%d' % (i + 1), 'text': plain(c)} for i, c in enumerate(L['choices'])]
+    key = q['answer']['answer_key']
+    idx = int(key[0]) if isinstance(key, list) and key else None
+    L2 = dict(L, stem=stem[:-1], interaction=dict(L.get('interaction') or {}, cloze={'segments': segs, 'blanks': [{'id': 'blank1', 'options': opts}]}))
+    L2.pop('choices', None)
+    ans = dict(q['answer'], answer_key={'blank1': opts[idx]['id']} if idx is not None and idx < len(opts) else key)
+    return dict(q, learner=L2, answer=ans)
+
+
 def compare(truth: dict, site: dict, fidelity: dict) -> list[dict]:
-    by_key = {q['question_key']: q for q in site.get('questions') or []}
+    prefix = str((site.get('exam') or {}).get('exam_code') or truth.get('exam_code') or '') + '-'
+    # the site file carries exam-scoped keys (QTYPE-FIXTURE-q001); truth uses the PDF key
+    by_key = {(q['question_key'][len(prefix):] if q['question_key'].startswith(prefix) else q['question_key']): q
+              for q in site.get('questions') or []}
     fid = {r['question_key']: r for r in fidelity.get('items') or []}
     rows = []
     for t in truth['questions']:
         k = t['question_key']
         q = by_key.get(k)
+        if q is not None:
+            q = cloze_view(q)
         problems = []
         if t.get('held'):
             if q is not None:
