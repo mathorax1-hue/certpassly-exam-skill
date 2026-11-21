@@ -51,7 +51,7 @@ Test with no installation: `PYTHONPATH=src python -m unittest discover -s tests 
 
 ## Reuse upstream without copying it
 
-The existing public upstream is [`msaqlainhaneef1/certpassly-exam-pipeline`](https://github.com/msaqlainhaneef1/certpassly-exam-pipeline), pinned to `13dea6bab662ab1c4bbf87017e912e519907c8bc`. Existing site-format rules, 15 stages and CSV schemas stay there until compatibility and reuse permissions are fully confirmed. No `LICENSE` file appeared in the upstream root tree at initial review; **do not vendor its code into this repository without permission**.
+The existing public upstream is [`msaqlainhaneef1/certpassly-exam-pipeline`](https://github.com/msaqlainhaneef1/certpassly-exam-pipeline), pinned to `d9b6bf67efb870019dd88caeffa90952b7e000d3` (tag v1.3.0). Existing site-format rules, 15 stages and CSV schemas stay there until compatibility and reuse permissions are fully confirmed. No `LICENSE` file appeared in the upstream root tree at initial review; **do not vendor its code into this repository without permission**.
 
 ```bash
 bash scripts/bootstrap_upstream.sh
@@ -74,6 +74,8 @@ The private workspace must have the config/source files required by upstream, as
 | `mathorax1-hue/ready-exams` | private | Independently checked and approved release evidence + packages |
 
 The release authority must remain in a protected private GitHub environment, not in AI-produced JSON or an MCP tool.
+
+The current end-to-end path is documented in [the three-phase workflow](docs/THREE-PHASE.md). Shared version is 0.2.0, with upstream v1.3.0.
 
 Read [`SKILL.md`](SKILL.md), [`AGENTS.md`](AGENTS.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), and [`knowledge/AB900-LESSONS.md`](knowledge/AB900-LESSONS.md). **New AI sessions must begin with the [canonical recovery and reusable-tool registry](docs/AI-SESSION-RECOVERY.md)** and the private handover linked from it. This repository is now the requested destination for all new shared skills, tooling, tests, and sanitized failure lessons.
 

@@ -14,10 +14,11 @@ from pathlib import Path
 from .pipeline import PlanError
 
 STAGE_NAMES = (
-    "catalog", "intake", "sources", "research", "extract", "textfix",
-    "answer_research", "intent", "author", "pages", "writing",
-    "import", "bank", "validate", "package",
+    "catalog", "intake", "sources", "research", "extract", "export",
+    "validate_site", "textfix", "answer_research", "intent", "author",
+    "pages", "writing", "import", "bank", "validate", "package",
 )
+TECHNICAL_STAGES = ("intake", "extract", "export", "validate_site", "package")
 CODE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,39}$")
 
 

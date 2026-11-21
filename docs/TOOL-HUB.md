@@ -122,3 +122,16 @@ For each new tool:
 8. Review and explicitly approve new dependency versions and any private workflow pin changes; never silently replace protected release gates.
 
 No special cloud service, background monitor, live importer or hidden GitHub permission is provided by installing these tools.
+
+## Three-phase technical tools
+
+See [THREE-PHASE.md](THREE-PHASE.md) for the full path. New shared commands:
+
+- `python scripts/prepare_exam_workspace.py --raw-dir PRIVATE/exams/CODE --workspace PRIVATE/work --exam CODE`
+- `python scripts/build_research_worklist.py --exam CODE --export-dir PRIVATE/export --output PRIVATE/research-worklist.json`
+- `python scripts/check_content_gate.py --site-file PRIVATE/CODE.site-format.v2.json --output PRIVATE/content-gate.json`
+- `python scripts/run_site_import_gate.py --sandbox PRIVATE/import-sandbox --site-file PRIVATE/CODE.site-format.v2.json --output PRIVATE/import-gate.json`
+- `python scripts/promote_ready_exam.py --exam CODE --site-file PRIVATE/CODE.site-format.v2.json --ready-root PRIVATE/ready-exams --raw-commit SHA --output PRIVATE/promotion.json`
+- `python scripts/run_three_phase.py --exam CODE --workspace PRIVATE/work --upstream vendor/certpassly-exam-pipeline`
+
+The site import gate runs only against a throwaway sqlite sandbox of website commit a3009daa5. It never uses port 3306, the 8330 audit, or production. Promotion stays a separate, explicit step.

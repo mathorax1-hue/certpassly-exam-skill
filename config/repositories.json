@@ -6,8 +6,10 @@
   "private_releases": "mathorax1-hue/ready-exams",
   "upstream": {
     "repository": "msaqlainhaneef1/certpassly-exam-pipeline",
-    "reviewed_commit": "13dea6bab662ab1c4bbf87017e912e519907c8bc",
-    "license_review": "No LICENSE file located in upstream root tree on 2026-11-12; do not vendor source files without permission"
+    "reviewed_commit": "d9b6bf67efb870019dd88caeffa90952b7e000d3",
+    "license_review": "No LICENSE file located in upstream root tree on 2026-11-12; do not vendor source files without permission. Pin updated to v1.3.0 for the site v2 technical path, fidelity gate and local OCR.",
+    "reviewed_tag": "v1.3.0",
+    "reviewed_on": "2026-11-21"
   },
   "policy": {
     "copy_private_exam_files_to_public": false,

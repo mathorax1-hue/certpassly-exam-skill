@@ -174,6 +174,72 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "research_worklist",
+      "path": "scripts/build_research_worklist.py",
+      "test": "tests/test_research_worklist.py",
+      "command": "python scripts/build_research_worklist.py --exam CODE --export-dir PRIVATE/export --output PRIVATE/research-worklist.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Writes a private worklist JSON; no network and no AI",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "content_gate",
+      "path": "scripts/check_content_gate.py",
+      "test": "tests/test_content_gate.py",
+      "command": "python scripts/check_content_gate.py --site-file PRIVATE/CODE.site-format.v2.json --output PRIVATE/content-gate.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Writes a private content-gate JSON; nonzero exit when blocked",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "prepare_exam_workspace",
+      "path": "scripts/prepare_exam_workspace.py",
+      "test": "tests/test_prepare_exam_workspace.py",
+      "command": "python scripts/prepare_exam_workspace.py --raw-dir PRIVATE/exams/CODE --workspace PRIVATE/work --exam CODE",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Copies a verified owner PDF into a private workspace and writes catalog plus rights config",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "promote_ready_exam",
+      "path": "scripts/promote_ready_exam.py",
+      "test": "tests/test_promote_ready_exam.py",
+      "command": "python scripts/promote_ready_exam.py --exam CODE --site-file PRIVATE/CODE.site-format.v2.json --ready-root PRIVATE/ready-exams --raw-commit SHA --output PRIVATE/promotion.json",
+      "dependencies": "Python >=3.11 standard library only",
+      "side_effects": "Copies a fully gated draft into a private ready-exams checkout only when --promote is set and every gate passes; never publishes",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "site_import_gate",
+      "path": "scripts/run_site_import_gate.py",
+      "test": "tests/test_site_import_gate.py",
+      "command": "python scripts/run_site_import_gate.py --sandbox PRIVATE/import-sandbox --site-file PRIVATE/CODE.site-format.v2.json --output PRIVATE/import-gate.json",
+      "dependencies": "Python >=3.11, php, a throwaway site sandbox on sqlite (never port 3306)",
+      "side_effects": "Imports drafts into a throwaway sandbox database only; refuses production, 3306 and 8330",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
+    },
+    {
+      "id": "three_phase_runner",
+      "path": "scripts/run_three_phase.py",
+      "test": "tests/test_three_phase_pin.py",
+      "command": "python scripts/run_three_phase.py --exam CODE --workspace PRIVATE/work --upstream vendor/certpassly-exam-pipeline",
+      "dependencies": "Pinned upstream v1.3.0 checkout plus the tools above",
+      "side_effects": "Runs technical stages in a private workspace, writes phase reports, promotes only when all gates pass and --promote is set",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }

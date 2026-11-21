@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the exact upstream revision into an ignored directory. Does not vendor files.
 set -euo pipefail
-PIN='13dea6bab662ab1c4bbf87017e912e519907c8bc'
+PIN='d9b6bf67efb870019dd88caeffa90952b7e000d3'
 DEST="${1:-vendor/certpassly-exam-pipeline}"
 if [[ -e "$DEST" ]]; then
   echo "Refusing to overwrite an existing directory: $DEST" >&2
