@@ -1,0 +1,608 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 3075e60..48ee065 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,11 @@
+ # Changelog
+ 
++## Unreleased (local rate-limit Groq 429 handling)
++
++On HTTP 429 the Groq provider waits using Retry-After, x-ratelimit-reset-tokens, or a "try again in Xs" message, capped at 65 seconds and at most two waits per item, then retries. Calls are paced to a 6000 input-tokens-per-minute budget (of Groq's 7000 ITPM). Wait counts are written to `export/ai-vision.json`.
++
++Tests: `tests/test_ai_vision_groq.py` (mock HTTP, no live calls).
++
+ ## Unreleased (local branch feat/groq-ai-vision)
+ 
+ A Groq provider can transcribe items still held after the enhance retry and the 400 dpi page-region retry. It is off by default. A private runner can enable it with environment variables. The default model is `qwen/qwen3.8-27b`, temperature is 0, and images are sent as data URIs with a User-Agent header. The API key is read only from `GROQ_API_KEY` and is never logged or written to reports. A per-run cap (default 50 calls), a timeout, and a small retry limit protect usage. The Qwen model accepts at most 3 images in one request, so more than 3 held crops are stitched into one image. The 400 dpi `crop-*` files are preferred. `CERTPASSLY_USE_COMMITTED_AI_READS=false` or `--ignore-committed-ai-reads` skips committed `review/ai-reads.json` so the live provider does the reads. Acceptance still uses the original dual OCR passes and the PDF text layer. Failures stay on the review sheet with the AI text as a suggestion. Provenance (model, request time, image sha256, call count) is written to `export/ai-vision.json`.
+diff --git a/config/ocr.json b/config/ocr.json
+index bef99e3..8be253c 100644
+--- a/config/ocr.json
++++ b/config/ocr.json
+@@ -153,6 +153,10 @@
+     "max_calls_per_run": 50,
+     "api_url": "https://api.groq.com/openai/v1/chat/completions",
+     "use_committed_reads": true,
+-    "accept_ocr_word_confidence": 90
++    "accept_ocr_word_confidence": 90,
++    "input_tokens_per_minute": 6000,
++    "max_rate_limit_wait_seconds": 65,
++    "max_rate_limit_waits": 2,
++    "tokens_per_image": 1200
+   }
+ }
+diff --git a/docs/ocr.md b/docs/ocr.md
+index f2223a6..8ac4a9f 100644
+--- a/docs/ocr.md
++++ b/docs/ocr.md
+@@ -76,7 +76,7 @@ When the first enhance retry still holds an item for OCR quality, a second scrip
+ 
+ ## AI vision hook
+ 
+-If both scripted retries still hold the item, an AI vision provider can transcribe the held images. The hook in `scripts/ai_vision.py` is off by default (`ai_vision.enabled` is false, `provider` is `none`). A private runner can set `CERTPASSLY_AI_VISION_ENABLED=true` and `CERTPASSLY_AI_VISION_PROVIDER=groq` to call Groq after the scripted retries. The Groq model default is `qwen/qwen3.8-27b`, temperature is 0, and the prompt asks for a strict transcription only. The API key is read from the environment variable `GROQ_API_KEY` and is never written to logs or reports. A per-run cap (`ai_vision.max_calls_per_run`, default 50) limits provider calls. Requests use a User-Agent header and send images as data URIs. The Qwen model allows at most 3 images per request, so extra 400 dpi crops are stitched into one image. Timeouts and a small number of retries apply to transient HTTP errors.
++If both scripted retries still hold the item, an AI vision provider can transcribe the held images. The hook in `scripts/ai_vision.py` is off by default (`ai_vision.enabled` is false, `provider` is `none`). A private runner can set `CERTPASSLY_AI_VISION_ENABLED=true` and `CERTPASSLY_AI_VISION_PROVIDER=groq` to call Groq after the scripted retries. The Groq model default is `qwen/qwen3.8-27b`, temperature is 0, and the prompt asks for a strict transcription only. The API key is read from the environment variable `GROQ_API_KEY` and is never written to logs or reports. A per-run cap (`ai_vision.max_calls_per_run`, default 50) limits provider calls. Requests use a User-Agent header and send images as data URIs. The Qwen model allows at most 3 images per request, so extra 400 dpi crops are stitched into one image. Timeouts and a small number of retries apply to transient HTTP errors. On HTTP 429 the provider reads Retry-After or x-ratelimit-reset-tokens, or parses a "try again in Xs" message, waits that long (capped at 65 seconds, at most two waits per item), and retries. Calls are also paced to an input-token budget (`ai_vision.input_tokens_per_minute`, default 6000 of Groq's 7000 ITPM) so later items are less likely to hit the limit. Wait counts are stored in `export/ai-vision.json`.
+ 
+ Committed `review/ai-reads.json` (or `review/ai-reads/QUESTION.json`) files are used when `ai_vision.use_committed_reads` is true (the default). Set `CERTPASSLY_USE_COMMITTED_AI_READS=false` or pass `--ignore-committed-ai-reads` so the live provider does the reads instead. A `hook_module` remains supported for other providers. The hook never auto-fills empty owner-correction files.
+ 
+diff --git a/scripts/ai_vision.py b/scripts/ai_vision.py
+index 1df2b85..21ad3c4 100644
+--- a/scripts/ai_vision.py
++++ b/scripts/ai_vision.py
+@@ -37,6 +37,10 @@ def vision_config(ocr_cfg=None):
+     cfg.setdefault('timeout_seconds', 60)
+     cfg.setdefault('max_retries', 2)
+     cfg.setdefault('max_calls_per_run', 50)
++    cfg.setdefault('input_tokens_per_minute', 6000)
++    cfg.setdefault('max_rate_limit_wait_seconds', 65)
++    cfg.setdefault('max_rate_limit_waits', 2)
++    cfg.setdefault('tokens_per_image', 1200)
+     cfg.setdefault('api_url', 'https://api.groq.com/openai/v1/chat/completions')
+     cfg.setdefault('accept_ocr_word_confidence', 90)
+     committed = _env_bool('CERTPASSLY_USE_COMMITTED_AI_READS')
+@@ -265,6 +269,10 @@ def build_record(item, read, verdict, now=None):
+         'groq_call_index': read.get('groq_call_index'),
+         'skip_reason': read.get('skip_reason') or '',
+         'transcribed_text': read.get('transcribed_text') or read.get('text') or '',
++        'rate_limit_waits': int(read.get('rate_limit_waits') or 0),
++        'pace_waits': int(read.get('pace_waits') or 0),
++        'wait_count': int(read.get('wait_count') or 0),
++        'wait_ms': int(read.get('wait_ms') or 0),
+     }
+ 
+ 
+@@ -287,6 +295,10 @@ def write_report(out_dir, exam, records, groq_calls=None):
+         'accepted': accepted,
+         'rejected': len(records) - accepted,
+         'groq_calls': groq_calls,
++        'rate_limit_waits': sum(int(r.get('rate_limit_waits') or 0) for r in records),
++        'pace_waits': sum(int(r.get('pace_waits') or 0) for r in records),
++        'wait_count': sum(int(r.get('wait_count') or 0) for r in records),
++        'wait_ms': sum(int(r.get('wait_ms') or 0) for r in records),
+         'note': 'AI vision provenance. This file is a raw-exam report, not a site v2 field. The API key is never stored here.',
+         'items': records,
+     }
+@@ -398,7 +410,7 @@ def collect_item_image_paths(item, out_dir, ocr_images=None):
+     return paths
+ 
+ 
+-def run_provider(item, images, cfg, out_dir=None, budget=None):
++def run_provider(item, images, cfg, out_dir=None, budget=None, pace=None):
+     """Run the configured vision provider. Returns None when disabled.
+ 
+     The default provider is none. Groq is used only when enabled and provider
+@@ -417,7 +429,7 @@ def run_provider(item, images, cfg, out_dir=None, budget=None):
+         paths = [p for p in images if p and os.path.isfile(p)]
+     if provider == 'groq':
+         import ai_vision_groq as G
+-        return G.transcribe_item(item, paths, vcfg, budget=budget)
++        return G.transcribe_item(item, paths, vcfg, budget=budget, pace=pace)
+     hook = vcfg.get('hook_module')
+     if not hook:
+         return None
+diff --git a/scripts/ai_vision_groq.py b/scripts/ai_vision_groq.py
+index cef6d93..72229bc 100644
+--- a/scripts/ai_vision_groq.py
++++ b/scripts/ai_vision_groq.py
+@@ -166,14 +166,203 @@ def post_json(url, headers, payload, timeout):
+         with urllib.request.urlopen(req, timeout=timeout) as resp:
+             body = resp.read().decode('utf-8', errors='replace')
+             status = getattr(resp, 'status', None) or resp.getcode()
+-            return int(status), json.loads(body) if body else {}
++            hdrs = _headers_dict(getattr(resp, 'headers', None))
++            return int(status), json.loads(body) if body else {}, hdrs
+     except urllib.error.HTTPError as exc:
+         raw = exc.read().decode('utf-8', errors='replace') if exc.fp else ''
+         try:
+             parsed = json.loads(raw) if raw else {}
+         except json.JSONDecodeError:
+             parsed = {}
+-        return int(exc.code), parsed
++        return int(exc.code), parsed, _headers_dict(getattr(exc, 'headers', None))
++
++
++def _headers_dict(headers):
++    if not headers:
++        return {}
++    try:
++        items = headers.items()
++    except AttributeError:
++        try:
++            items = dict(headers).items()
++        except Exception:
++            return {}
++    out = {}
++    for key, value in items:
++        out[str(key)] = value if isinstance(value, str) else str(value)
++    return out
++
++
++def unpack_post_result(result):
++    """Accept (status, body) or (status, body, headers)."""
++    if not isinstance(result, tuple) or len(result) < 2:
++        raise TypeError('provider post() must return a status and body')
++    status, body = result[0], result[1]
++    headers = result[2] if len(result) >= 3 and result[2] is not None else {}
++    if not isinstance(headers, dict):
++        headers = _headers_dict(headers)
++    return int(status), body, headers
++
++
++def _header(headers, *names):
++    if not headers:
++        return None
++    lower = {str(k).lower(): v for k, v in headers.items()}
++    for name in names:
++        if name.lower() in lower:
++            val = lower[name.lower()]
++            if val is None or val == '':
++                continue
++            return str(val).strip()
++    return None
++
++
++def _parse_seconds_token(raw, now=None):
++    """Parse Retry-After, reset headers, or a short duration like 6s or 1m5s."""
++    import re
++    from email.utils import parsedate_to_datetime
++    if raw is None:
++        return None
++    text = str(raw).strip()
++    if not text:
++        return None
++    # HTTP-date
++    try:
++        dt = parsedate_to_datetime(text)
++        if dt is not None:
++            stamp = dt.timestamp()
++            base = time.time() if now is None else now
++            return max(0.0, stamp - base)
++    except (TypeError, ValueError, OverflowError):
++        pass
++    m = re.fullmatch(r'(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+(?:\.\d+)?)s)?', text, re.I)
++    if m and any(m.groups()):
++        hours = float(m.group(1) or 0)
++        mins = float(m.group(2) or 0)
++        secs = float(m.group(3) or 0)
++        return hours * 3600 + mins * 60 + secs
++    try:
++        val = float(text)
++    except (TypeError, ValueError):
++        return None
++    # Large values are unix timestamps.
++    if val > 1000000000:
++        base = time.time() if now is None else now
++        return max(0.0, val - base)
++    return max(0.0, val)
++
++
++def parse_retry_wait_seconds(status, body, headers=None, max_wait=65.0, now=None):
++    """Seconds to wait after HTTP 429. Prefers Retry-After, then reset-tokens, then the message."""
++    import re
++    try:
++        code = int(status)
++    except (TypeError, ValueError):
++        return None
++    if code != 429:
++        return None
++    cap = _as_float(max_wait, 65.0)
++    if cap < 0:
++        cap = 0.0
++    raw = _header(headers, 'Retry-After', 'retry-after')
++    wait = _parse_seconds_token(raw, now=now) if raw else None
++    if wait is None:
++        raw = _header(headers, 'x-ratelimit-reset-tokens')
++        wait = _parse_seconds_token(raw, now=now) if raw else None
++    if wait is None and isinstance(body, dict):
++        err = body.get('error') or {}
++        msg = err.get('message') if isinstance(err, dict) else err
++        msg = str(msg or '')
++        m = re.search(r'try again in\s+((?:\d+\s*h)?\s*(?:\d+\s*m)?\s*(?:\d+(?:\.\d+)?)\s*s?)', msg, re.I)
++        if m:
++            wait = _parse_seconds_token(m.group(1).strip(), now=now)
++    if wait is None:
++        return None
++    return min(cap, max(0.0, wait))
++
++
++def estimate_input_tokens(payload, image_count, tokens_per_image=1200):
++    """Estimate prompt tokens without counting base64 image bytes."""
++    per = _as_int(tokens_per_image, 1200)
++    if per < 0:
++        per = 0
++    text_chars = 0
++    for msg in (payload or {}).get('messages') or []:
++        if not isinstance(msg, dict):
++            continue
++        content = msg.get('content')
++        if isinstance(content, str):
++            text_chars += len(content)
++            continue
++        for part in content or []:
++            if isinstance(part, dict) and part.get('type') == 'text':
++                text_chars += len(part.get('text') or '')
++    text_tokens = max(1, (text_chars + 3) // 4)
++    return text_tokens + per * max(0, int(image_count or 0))
++
++
++def prompt_tokens_from_body(body):
++    if not isinstance(body, dict):
++        return None
++    usage = body.get('usage') or {}
++    if not isinstance(usage, dict) or usage.get('prompt_tokens') is None:
++        return None
++    try:
++        return int(usage.get('prompt_tokens'))
++    except (TypeError, ValueError):
++        return None
++
++
++class TokenPace:
++    """Pace Groq calls so estimated input tokens stay under a per-minute budget."""
++
++    def __init__(self, budget_per_minute=6000, max_wait_seconds=65.0, window_seconds=60.0, sleeper=None, clock=None):
++        self.budget = max(0, _as_int(budget_per_minute, 6000))
++        self.max_wait_seconds = max(0.0, _as_float(max_wait_seconds, 65.0))
++        self.window_seconds = max(1.0, _as_float(window_seconds, 60.0))
++        self.sleeper = sleeper or time.sleep
++        self.clock = clock or time.time
++        self.events = []
++        self.pace_waits = 0
++        self.pace_wait_ms = 0
++
++    def _prune(self, now):
++        cutoff = now - self.window_seconds
++        self.events = [(ts, tok) for ts, tok in self.events if ts > cutoff]
++
++    def before_call(self, estimated_tokens):
++        tokens = max(0, int(estimated_tokens or 0))
++        if self.budget <= 0 or tokens <= 0:
++            return 0.0
++        now = self.clock()
++        self._prune(now)
++        used = sum(tok for _ts, tok in self.events)
++        # A single call may itself exceed the budget; still send it.
++        if used == 0 or used + tokens <= self.budget:
++            return 0.0
++        need = used + tokens - self.budget
++        freed = 0
++        wait = self.window_seconds
++        for ts, tok in self.events:
++            freed += tok
++            if freed >= need:
++                wait = max(0.0, self.window_seconds - (now - ts))
++                break
++        wait = min(wait, self.max_wait_seconds)
++        if wait > 0:
++            self.sleeper(wait)
++            self.pace_waits += 1
++            self.pace_wait_ms += int(wait * 1000)
++            self._prune(self.clock())
++        return wait
++
++    def record(self, tokens):
++        try:
++            amount = int(tokens or 0)
++        except (TypeError, ValueError):
++            amount = 0
++        if amount > 0:
++            self.events.append((self.clock(), amount))
+ 
+ 
+ def _message_text(body):
+@@ -202,13 +391,17 @@ def _redact(text, key):
+     return str(text).replace(key, '[redacted]')
+ 
+ 
+-def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=None):
++def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=None, pace=None, sleeper=None):
+     """Call Groq once for an item. Returns a read dict or a skipped/error dict.
+ 
+     The API key is never included in the return value or in log fields.
++    HTTP 429 waits use Retry-After, x-ratelimit-reset-tokens, or a
++    'try again in Xs' message, capped per wait, with a max wait count.
++    Calls are also paced against an input-tokens-per-minute budget.
+     """
+     cfg = cfg or {}
+     key = key if key is not None else api_key_from_env()
++    sleeper = sleeper or time.sleep
+     started = time.time()
+     request_time = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+     model = cfg.get('model') or DEFAULT_MODEL
+@@ -220,6 +413,10 @@ def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=Non
+         'request_time': request_time,
+         'image_sha256': '',
+         'transcribed_text': '',
++        'rate_limit_waits': 0,
++        'pace_waits': 0,
++        'wait_count': 0,
++        'wait_ms': 0,
+     }
+     if not key:
+         out['skip_reason'] = 'GROQ_API_KEY is not set'
+@@ -248,6 +445,19 @@ def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=Non
+     url = cfg.get('api_url') or DEFAULT_API_URL
+     timeout = _as_float(cfg.get('timeout_seconds'), 60.0)
+     max_retries = _as_int(cfg.get('max_retries'), 2)
++    max_wait = _as_float(cfg.get('max_rate_limit_wait_seconds'), 65.0)
++    max_rl_waits = _as_int(cfg.get('max_rate_limit_waits'), 2)
++    tokens_per_image = _as_int(cfg.get('tokens_per_image'), 1200)
++    if pace is None:
++        pace = TokenPace(
++            budget_per_minute=_as_int(cfg.get('input_tokens_per_minute'), 6000),
++            max_wait_seconds=max_wait,
++            sleeper=sleeper,
++        )
++    else:
++        # Use the same sleeper when the caller did not bind one on the pacer.
++        if getattr(pace, 'sleeper', None) is time.sleep and sleeper is not time.sleep:
++            pace.sleeper = sleeper
+     headers = {
+         'Authorization': 'Bearer ' + key,
+         'Content-Type': 'application/json',
+@@ -257,16 +467,36 @@ def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=Non
+     last_status = None
+     last_error = None
+     attempts = max(1, max_retries + 1)
++    rate_limit_waits = 0
++    rate_limit_wait_ms = 0
++    pace_waits_before = getattr(pace, 'pace_waits', 0) or 0
++    pace_ms_before = getattr(pace, 'pace_wait_ms', 0) or 0
++    image_count = len(payload.get('messages', [{}])[0].get('content') or []) - 1
++    estimated = estimate_input_tokens(payload, image_count, tokens_per_image)
++
++    def _finish_waits():
++        pace_waits = max(0, (getattr(pace, 'pace_waits', 0) or 0) - pace_waits_before)
++        pace_ms = max(0, (getattr(pace, 'pace_wait_ms', 0) or 0) - pace_ms_before)
++        out['rate_limit_waits'] = rate_limit_waits
++        out['pace_waits'] = pace_waits
++        out['wait_count'] = rate_limit_waits + pace_waits
++        out['wait_ms'] = rate_limit_wait_ms + pace_ms
++
+     for i in range(attempts):
++        if pace is not None:
++            pace.before_call(estimated)
+         try:
+-            status, body = poster(url, headers, payload, timeout)
++            status, body, resp_headers = unpack_post_result(poster(url, headers, payload, timeout))
+         except Exception as exc:
+             last_error = _redact(str(exc), key)
+             last_status = None
+             if i + 1 < attempts:
+-                time.sleep(min(2 ** i, 8))
++                sleeper(min(2 ** i, 8))
+             continue
+         last_status = status
++        used_tokens = prompt_tokens_from_body(body)
++        if pace is not None:
++            pace.record(used_tokens if used_tokens is not None else estimated)
+         if status == 200:
+             text = _message_text(body)
+             out['transcribed_text'] = text
+@@ -275,8 +505,11 @@ def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=Non
+             out['duration_ms'] = int((time.time() - started) * 1000)
+             if budget is not None:
+                 out['groq_call_index'] = budget.used
++            if used_tokens is not None:
++                out['prompt_tokens'] = used_tokens
+             if not text:
+                 out['skip_reason'] = 'Groq returned an empty transcription'
++            _finish_waits()
+             return out
+         # Retry transient failures only. Do not retry 401/403/400.
+         last_error = 'HTTP %s' % status
+@@ -286,12 +519,25 @@ def transcribe_item(item, image_paths, cfg=None, post=None, budget=None, key=Non
+                 last_error = 'HTTP %s: %s' % (status, _redact(str(err.get('message')), key)[:200])
+         if status in (401, 403, 400, 404, 413, 422):
+             break
+-        if i + 1 < attempts:
+-            time.sleep(min(2 ** i, 8))
++        if i + 1 >= attempts:
++            break
++        if status == 429:
++            if rate_limit_waits >= max_rl_waits:
++                break
++            wait = parse_retry_wait_seconds(status, body, resp_headers, max_wait=max_wait)
++            if wait is None:
++                wait = min(2 ** i, 8)
++            wait = min(max_wait, max(0.0, wait))
++            sleeper(wait)
++            rate_limit_waits += 1
++            rate_limit_wait_ms += int(wait * 1000)
++            continue
++        sleeper(min(2 ** i, 8))
+     out['http_status'] = last_status
+-    out['attempts'] = attempts
++    out['attempts'] = i + 1 if last_status is not None or last_error else attempts
+     out['skip_reason'] = last_error or 'Groq request failed'
+     out['duration_ms'] = int((time.time() - started) * 1000)
+     if budget is not None:
+         out['groq_call_index'] = budget.used
++    _finish_waits()
+     return out
+diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
+index 5683b33..5328565 100644
+--- a/scripts/build_technical_export.py
++++ b/scripts/build_technical_export.py
+@@ -594,6 +594,10 @@ def main(argv=None):
+     ai_by_key = {}
+     import ai_vision_groq as G
+     ai_budget = G.CallBudget(vision_cfg.get('max_calls_per_run') or 50)
++    ai_pace = G.TokenPace(
++        budget_per_minute=vision_cfg.get('input_tokens_per_minute') or 6000,
++        max_wait_seconds=vision_cfg.get('max_rate_limit_wait_seconds') or 65,
++    )
+ 
+     questions = []
+     held = []
+@@ -712,7 +716,7 @@ def main(argv=None):
+                 if not read:
+                     hook = AI.run_provider(
+                         item, (ocr_item or {}).get('images') or [], ocr_cfg,
+-                        out_dir=out, budget=ai_budget)
++                        out_dir=out, budget=ai_budget, pace=ai_pace)
+                     if isinstance(hook, dict):
+                         hook = dict(hook)
+                         hook.setdefault('question_key', key)
+diff --git a/tests/test_ai_vision_groq.py b/tests/test_ai_vision_groq.py
+index e4da4c6..42dd809 100644
+--- a/tests/test_ai_vision_groq.py
++++ b/tests/test_ai_vision_groq.py
+@@ -277,6 +277,139 @@ class GroqProviderTests(unittest.TestCase):
+         self.assertIn('sources:', out['image_sha256'])
+ 
+ 
++    def test_429_honors_retry_after_header(self):
++        body = {'choices': [{'message': {'content': 'ok after wait'}}]}
++        http = FakeHttp([
++            (429, {'error': {'message': 'rate'}}, {'Retry-After': '3'}),
++            (200, body),
++        ])
++        slept = []
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 2, 'input_tokens_per_minute': 100000},
++            post=http, budget=G.CallBudget(5), key='test-key-not-real', sleeper=slept.append)
++        self.assertEqual(out['transcribed_text'], 'ok after wait')
++        self.assertEqual(out['rate_limit_waits'], 1)
++        self.assertEqual(out['wait_count'], 1)
++        self.assertEqual(slept, [3.0])
++        self.assertGreaterEqual(out['wait_ms'], 3000)
++        self.assertNotIn('test-key-not-real', json.dumps(out))
++
++    def test_429_honors_reset_tokens_header(self):
++        body = {'choices': [{'message': {'content': 'ok'}}]}
++        http = FakeHttp([
++            (429, {}, {'x-ratelimit-reset-tokens': '2.5'}),
++            (200, body),
++        ])
++        slept = []
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 2, 'input_tokens_per_minute': 100000},
++            post=http, budget=G.CallBudget(5), key='k', sleeper=slept.append)
++        self.assertEqual(out['http_status'], 200)
++        self.assertEqual(slept, [2.5])
++        self.assertEqual(out['rate_limit_waits'], 1)
++
++    def test_429_honors_try_again_message(self):
++        body = {'choices': [{'message': {'content': 'ok'}}]}
++        err = {'error': {'message': 'Rate limit reached for model. Limit 7000 TPM used 7000 requested 800. Please try again in 6s. Need 800 more?'}}
++        http = FakeHttp([(429, err), (200, body)])
++        slept = []
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 2, 'input_tokens_per_minute': 100000},
++            post=http, budget=G.CallBudget(5), key='k', sleeper=slept.append)
++        self.assertEqual(out['http_status'], 200)
++        self.assertEqual(slept, [6.0])
++        self.assertEqual(out['rate_limit_waits'], 1)
++
++    def test_429_wait_is_capped_and_max_two_waits(self):
++        err = {'error': {'message': 'Please try again in 1m10s.'}}
++        http = FakeHttp([(429, err), (429, err), (429, err), (200, {'choices': [{'message': {'content': 'late'}}]})])
++        slept = []
++        out = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 5, 'max_rate_limit_wait_seconds': 65, 'max_rate_limit_waits': 2, 'input_tokens_per_minute': 100000},
++            post=http, budget=G.CallBudget(5), key='k', sleeper=slept.append)
++        self.assertEqual(out['http_status'], 429)
++        self.assertIn('HTTP 429', out['skip_reason'])
++        self.assertEqual(out['rate_limit_waits'], 2)
++        self.assertEqual(slept, [65.0, 65.0])
++        self.assertEqual(len(http.calls), 3)
++        self.assertFalse(out['transcribed_text'])
++
++    def test_itpm_pacer_waits_before_later_calls(self):
++        clock = {'now': 1000.0}
++        slept = []
++
++        def now():
++            return clock['now']
++
++        def sleep(sec):
++            slept.append(sec)
++            clock['now'] += sec
++
++        pace = G.TokenPace(budget_per_minute=1000, max_wait_seconds=65, sleeper=sleep, clock=now)
++        pace.record(900)
++        clock['now'] = 1010.0
++        wait = pace.before_call(200)
++        self.assertAlmostEqual(wait, 50.0)
++        self.assertEqual(slept, [50.0])
++        self.assertEqual(pace.pace_waits, 1)
++        self.assertGreaterEqual(pace.pace_wait_ms, 50000)
++
++        # Shared pacer across two items: first records 900 tokens, second must wait.
++        slept.clear()
++        clock['now'] = 2000.0
++        pace2 = G.TokenPace(budget_per_minute=1000, max_wait_seconds=65, sleeper=sleep, clock=now)
++        body1 = {'choices': [{'message': {'content': 'one'}}], 'usage': {'prompt_tokens': 900}}
++        body2 = {'choices': [{'message': {'content': 'two'}}], 'usage': {'prompt_tokens': 200}}
++        http = FakeHttp([(200, body1), (200, body2)])
++        first = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 0, 'input_tokens_per_minute': 1000},
++            post=http, budget=G.CallBudget(5), key='k', pace=pace2, sleeper=sleep)
++        second = G.transcribe_item(
++            self.item, [str(self.img)],
++            {'max_retries': 0, 'input_tokens_per_minute': 1000},
++            post=http, budget=G.CallBudget(5), key='k', pace=pace2, sleeper=sleep)
++        self.assertEqual(first['transcribed_text'], 'one')
++        self.assertEqual(first['pace_waits'], 0)
++        self.assertEqual(second['transcribed_text'], 'two')
++        self.assertEqual(second['pace_waits'], 1)
++        self.assertEqual(len(slept), 1)
++        self.assertGreater(slept[0], 0)
++        self.assertLessEqual(slept[0], 65)
++
++    def test_report_sums_wait_counts(self):
++        records = [
++            {'question_key': 'q001', 'accepted': True, 'rate_limit_waits': 1, 'pace_waits': 0, 'wait_count': 1, 'wait_ms': 3000, 'transcribed_text': 'a', 'groq_call_index': 1},
++            {'question_key': 'q002', 'accepted': False, 'rate_limit_waits': 0, 'pace_waits': 1, 'wait_count': 1, 'wait_ms': 4000, 'transcribed_text': 'b', 'groq_call_index': 2},
++        ]
++        import tempfile
++        tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(tmp.cleanup)
++        path = AI.write_report(tmp.name, 'DEMO', records, groq_calls=2)
++        data = json.loads(Path(path).read_text(encoding='utf-8'))
++        self.assertEqual(data['rate_limit_waits'], 1)
++        self.assertEqual(data['pace_waits'], 1)
++        self.assertEqual(data['wait_count'], 2)
++        self.assertEqual(data['wait_ms'], 7000)
++        self.assertEqual(data['groq_calls'], 2)
++
++    def test_defaults_include_itpm_budget(self):
++        with mock.patch.dict(__import__('os').environ, {}, clear=False):
++            for name in (
++                'CERTPASSLY_AI_VISION_ENABLED', 'CERTPASSLY_AI_VISION_PROVIDER',
++                'CERTPASSLY_AI_VISION_MODEL', 'CERTPASSLY_USE_COMMITTED_AI_READS',
++            ):
++                __import__('os').environ.pop(name, None)
++            cfg = AI.vision_config({'ai_vision': {}})
++        self.assertEqual(cfg['input_tokens_per_minute'], 6000)
++        self.assertEqual(cfg['max_rate_limit_wait_seconds'], 65)
++        self.assertEqual(cfg['max_rate_limit_waits'], 2)
++
++
+ class CollectImageTests(unittest.TestCase):
+     def test_prefers_page_region_crop_over_source_path(self):
+         import tempfile
