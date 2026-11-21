@@ -69,6 +69,26 @@ class LeakCheckTests(unittest.TestCase):
         phrases = C.collect_phrases(self.site, None, None)
         self.assertTrue(any(p.endswith("p-2_1.png") or "p-2_1.png" == p for p in phrases) or any("alt string" in p for p in phrases))
 
+    def test_ignores_short_runner_heading(self):
+        short = "Operating System"
+        doc = json.loads(self.site.read_text(encoding="utf-8"))
+        doc["questions"][0]["learner"]["choices"].append(
+            [{"type": "paragraph", "content": [{"text": short}]}]
+        )
+        self.site.write_text(json.dumps(doc), encoding="utf-8")
+        phrases = C.collect_phrases(self.site, None, None)
+        self.assertFalse(any(p.lower() == short.lower() for p in phrases))
+        log = self.dir / "setup.log"
+        log.write_text("##[group]Operating System\nUbuntu\n##[endgroup]\n", encoding="utf-8")
+        self.assertEqual(C.main(["--log", str(log), "--site-file", str(self.site)]), 0)
+
+    def test_skips_setup_job_files(self):
+        logdir = self.dir / "logs"
+        logdir.mkdir()
+        (logdir / "1_Set up job.txt").write_text("pipeline said: %s\n" % STEM, encoding="utf-8")
+        (logdir / "13_Run three phases.txt").write_text("exported_question_count=80\n", encoding="utf-8")
+        self.assertEqual(C.main(["--log", str(logdir), "--site-file", str(self.site)]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

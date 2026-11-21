@@ -45,10 +45,21 @@ def _norm(text: str) -> str:
 
 def _useful(text: str, minimum: int = MIN_PHRASE) -> bool:
     s = _norm(text)
-    if len(s) < minimum:
+    if not s:
         return False
+    # Keep media and source file names even when they are short tokens.
+    if re.search(r"\.[A-Za-z0-9]{2,4}$", s) and len(s) >= 8:
+        return True
     letters = sum(ch.isalpha() for ch in s)
-    return letters >= min(8, minimum // 2)
+    words = len(s.split())
+    # Two-word labels like common runner headings must not become leak phrases.
+    if words >= 4 and letters >= 16:
+        return True
+    if words >= 3 and len(s) >= 24 and letters >= 16:
+        return True
+    if len(s) >= 40 and letters >= 24:
+        return True
+    return False
 
 
 def phrases_from_site(path: Path) -> list[str]:
@@ -133,13 +144,27 @@ def collect_phrases(site_file: Path | None, export_dir: Path | None, raw_dir: Pa
     return phrases
 
 
+SKIP_NAME_RX = re.compile(r"(?:^|/)(?:\d+_)?Set up job\.txt$|/(?:\d+_)?system\.txt$", re.I)
+GROUP_LINE_RX = re.compile(r"##\[(?:group|endgroup)\]")
+
+
+def _scan_blob(text: str) -> str:
+    # Drop GitHub grouping headers so runner labels are not treated as leaks.
+    kept = []
+    for line in (text or "").splitlines():
+        if GROUP_LINE_RX.search(line):
+            continue
+        kept.append(line)
+    return _norm("\n".join(kept)).lower()
+
+
 def scan_text(text: str, phrases: list[str]) -> dict:
     blob = text or ""
     secret_hits = len(SECRET_RX.findall(blob))
-    lowered = blob.lower()
+    lowered = _scan_blob(blob)
     phrase_hits = 0
     for phrase in phrases:
-        if phrase.lower() in lowered:
+        if _norm(phrase).lower() in lowered:
             phrase_hits += 1
     return {
         "phrase_count": len(phrases),
@@ -155,8 +180,11 @@ def iter_log_files(path: Path) -> list[Path]:
     files: list[Path] = []
     if path.is_dir():
         for child in sorted(path.rglob("*")):
-            if child.is_file() and child.stat().st_size > 0:
-                files.append(child)
+            if not child.is_file() or child.stat().st_size <= 0:
+                continue
+            if SKIP_NAME_RX.search(str(child).replace("\\", "/")):
+                continue
+            files.append(child)
     return files
 
 
