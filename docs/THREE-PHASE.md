@@ -67,5 +67,6 @@ The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd8
 2. `v1.3.0-ocr-retry-review-sheet.patch` adds the OCR retry pass, the review sheet, and owner-corrections support.
 3. `v1.3.0-page-region-ai-vision.patch` adds the 400 dpi page-region retry and the AI vision hook (off by default; committed `ai-reads.json` files are still read). The AI acceptance rule uses high-confidence words from the original OCR passes, not a later failed retry.
 4. `v1.3.0-page-region-ai-vision2-groq.patch` adds the Groq provider. It stays off unless a private runner sets provider groq. Public exam dispatch stays refused and does not enable Groq.
+5. `v1.3.0-page-region-ai-vision3-groq-images.patch` stitches more than 3 held crops into one image, because the Qwen model rejects a request with more than 3 images, and prefers the 400 dpi crop files.
 
 The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.
