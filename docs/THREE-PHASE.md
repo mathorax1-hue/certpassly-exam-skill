@@ -65,6 +65,6 @@ The reusable workflow checks out pinned upstream `v1.3.0` (`d9b6bf67efb870019dd8
 
 1. `v1.3.0-lead-ligature-complete-words.patch` stops `text_repair.lead()` from turning complete words such as `replace` into `fireplace`.
 2. `v1.3.0-ocr-retry-review-sheet.patch` adds the OCR retry pass, the review sheet, and owner-corrections support.
-3. `v1.3.0-page-region-ai-vision.patch` adds the 400 dpi page-region retry and the AI vision hook (off by default in Actions; committed `ai-reads.json` files are still read).
+3. `v1.3.0-page-region-ai-vision.patch` adds the 400 dpi page-region retry and the AI vision hook (off by default in Actions; committed `ai-reads.json` files are still read). The AI acceptance rule uses high-confidence words from the original OCR passes, not a later failed retry.
 
 The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.

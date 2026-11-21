@@ -1,34 +1,3 @@
-From 41c2c53d7187320efe8181f8c647ebec58971f35 Mon Sep 17 00:00:00 2001
-From: "mathorax.com" <mathorax1@gmail.com>
-Date: Sat, 21 Nov 2026 17:21:19 +0500
-Subject: [PATCH] Add 400 dpi page-region retry and an AI vision hook
-
-When the first enhance retry still holds an item for OCR quality, crop
-the question region from a 400 dpi PDF page render and rerun both
-fidelity passes. The same strict gate still applies.
-
-An AI vision hook is off by default (no key in Actions). Committed
-review/ai-reads.json files are read on the next run. AI text is accepted
-only when high-confidence OCR words appear in order, PDF text-layer
-words are covered, and type and key rules pass. Accepted items export
-with reviewer_needed true. Provenance stays in export/ai-vision.json.
-Otherwise the item stays on the review sheet with the AI text as a
-suggestion.
----
- CHANGELOG.md                      |   6 +
- config/ocr.json                   |  18 +-
- docs/ocr.md                       |  18 ++
- examples/ai-reads.example.json    |  15 ++
- scripts/ai_vision.py              | 273 ++++++++++++++++++++++++++++++
- scripts/build_technical_export.py | 115 ++++++++++---
- scripts/ocr_extract.py            |   3 +-
- scripts/ocr_retry.py              | 266 +++++++++++++++++++++++++++++
- scripts/review_sheet.py           |  16 +-
- tests/test_ocr_retry_review.py    |  69 ++++++++
- 10 files changed, 775 insertions(+), 24 deletions(-)
- create mode 100644 examples/ai-reads.example.json
- create mode 100644 scripts/ai_vision.py
-
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index 3492749..1b979e6 100644
 --- a/CHANGELOG.md
@@ -74,7 +43,7 @@ index def0aee..b1ec0a9 100644
    }
  }
 diff --git a/docs/ocr.md b/docs/ocr.md
-index 2099eda..03a4e8c 100644
+index 2099eda..8b6d1a8 100644
 --- a/docs/ocr.md
 +++ b/docs/ocr.md
 @@ -70,3 +70,21 @@ Owner corrections live in `exams/CODE/review/owner-corrections.json` in raw-exam
@@ -91,7 +60,7 @@ index 2099eda..03a4e8c 100644
 +
 +An AI transcription is accepted only when:
 +
-+- every OCR word with confidence 90 or above, from both fidelity passes, appears in the AI text in order
++- every OCR word with confidence 90 or above, from both original fidelity passes (not a later failed retry), appears in the AI text in order
 +- every PDF text-layer word is still covered (by the AI text plus the already extracted stem and choices)
 +- type and key rules pass, and the site v2 schema still accepts the question
 +
@@ -122,10 +91,10 @@ index 0000000..d4ad51f
 +}
 diff --git a/scripts/ai_vision.py b/scripts/ai_vision.py
 new file mode 100644
-index 0000000..3c60b06
+index 0000000..34103fe
 --- /dev/null
 +++ b/scripts/ai_vision.py
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,277 @@
 +#!/usr/bin/env python3
 +"""Pluggable AI vision hook for OCR-held items. Off by default. No auto-fill."""
 +from __future__ import annotations
@@ -293,7 +262,11 @@ index 0000000..3c60b06
 +
 +
 +def accept_ai_text(ai_text, ocr_item, item, fid_cfg=None, deny=None, min_conf=90):
-+    """Strict acceptance. Does not invent text or lower the fidelity floors."""
++    """Strict acceptance. Does not invent text or lower the fidelity floors.
++
++    High-confidence words are taken from the original dual OCR passes, not from
++    a later failed retry that may have invented tokens.
++    """
 +    fid_cfg = fid_cfg or {}
 +    reasons = []
 +    ai_tokens = fidelity.tokenize(ai_text or '', fid_cfg)
@@ -400,7 +373,7 @@ index 0000000..3c60b06
 +        return None
 +    return fn(item, images, vcfg)
 diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
-index 35bc783..c4b1b41 100644
+index 35bc783..0b94cee 100644
 --- a/scripts/build_technical_export.py
 +++ b/scripts/build_technical_export.py
 @@ -14,6 +14,7 @@ and catalog.csv. Writes:
@@ -442,7 +415,15 @@ index 35bc783..c4b1b41 100644
  
      questions = []
      held = []
-@@ -493,24 +499,89 @@ def main(argv=None):
+@@ -467,6 +473,7 @@ def main(argv=None):
+         item = split[key]
+         vis = visual.get(key)
+         ocr_item = ocr_items.get(key) or {}
++        ocr_original = ocr_item
+         correction = corrections.get(key)
+         owner_applied = False
+         if correction:
+@@ -493,24 +500,89 @@ def main(argv=None):
              else:
                  owner_records.append(dict(rec, owner_checked=False,
                                            rejected_reason=(hold or {}).get('reason') or 'type or schema failed'))
@@ -519,7 +500,7 @@ index 35bc783..c4b1b41 100644
 +                if read:
 +                    verdict = AI.accept_ai_text(
 +                        read.get('transcribed_text') or read.get('text') or '',
-+                        ocr_item, item, fid_cfg=fid_cfg, deny=deny,
++                        ocr_original, item, fid_cfg=fid_cfg, deny=deny,
 +                        min_conf=float((AI.vision_config(ocr_cfg) or {}).get('accept_ocr_word_confidence') or 90),
 +                    )
 +                    rec = AI.build_record(item, read, verdict)
@@ -550,7 +531,7 @@ index 35bc783..c4b1b41 100644
          fid_row = {
              'question_key': key,
              'status': 'exported' if q and not hold else 'held',
-@@ -527,6 +598,10 @@ def main(argv=None):
+@@ -527,6 +599,10 @@ def main(argv=None):
                  'ocr_agree', 'type_rules')})
          if owner_applied and q and not hold:
              fid_row['owner_checked'] = True
@@ -561,7 +542,7 @@ index 35bc783..c4b1b41 100644
          if hold:
              if not fid_row['reason']:
                  fid_row['reason'] = hold.get('reason') or ''
-@@ -593,9 +668,11 @@ def main(argv=None):
+@@ -593,9 +669,11 @@ def main(argv=None):
          fidelity.write_reports(out, exam, fid_rows)
      if retry_logs:
          ocr_retry.write_retry_log(out, retry_logs, exam=exam)
@@ -935,10 +916,10 @@ index 2913e3c..e9c69df 100644
          'schema_version': 1,
          'exam_code': exam,
 diff --git a/tests/test_ocr_retry_review.py b/tests/test_ocr_retry_review.py
-index 020dff1..ca3e91b 100644
+index 020dff1..2912be1 100644
 --- a/tests/test_ocr_retry_review.py
 +++ b/tests/test_ocr_retry_review.py
-@@ -240,5 +240,74 @@ class ExportRetryHookTests(unittest.TestCase):
+@@ -240,5 +240,94 @@ class ExportRetryHookTests(unittest.TestCase):
              self.assertEqual(cannot, [])
  
  
@@ -1004,6 +985,26 @@ index 020dff1..ca3e91b 100644
 +        self.assertFalse(AI.is_complete_read({'question_key': 'q001', 'transcribed_text': ''}))
 +        self.assertTrue(AI.is_complete_read({'question_key': 'q001', 'transcribed_text': 'hello'}))
 +
++    def test_accept_ignores_later_retry_garbage_when_given_original_ocr(self):
++        import ai_vision as AI
++        item = {
++            'question_key': 'q001',
++            'stem': 'What is two plus two?',
++            'options': {'a': '3', 'b': '4'},
++            'source_text': 'What is two plus two?\nA. 3\nB. 4',
++        }
++        original = {'images': [{'passes': {
++            'psm3': {'words': [{'text': 'publish', 'conf': 96.0}, {'text': 'RTT', 'conf': 93.0}]},
++            'psm6': {'words': [{'text': 'publish', 'conf': 94.0}, {'text': 'RTT', 'conf': 91.0}]},
++        }}]}
++        retry_garbage = {'images': [{'passes': {
++            'psm3': {'words': [{'text': 'niv', 'conf': 96.0}, {'text': 'ction', 'conf': 94.0}]},
++            'psm6': {'words': [{'text': 't', 'conf': 97.0}]},
++        }}]}
++        text = 'publish ONLY the RTT value'
++        self.assertTrue(AI.accept_ai_text(text, original, item, min_conf=90)['ok'])
++        self.assertFalse(AI.accept_ai_text(text, retry_garbage, item, min_conf=90)['ok'])
++
 +    def test_hook_disabled_returns_none(self):
 +        import ai_vision as AI
 +        self.assertIsNone(AI.run_provider({'question_key': 'q001'}, [], {
@@ -1013,6 +1014,3 @@ index 020dff1..ca3e91b 100644
 +
  if __name__ == '__main__':
      unittest.main()
--- 
-2.47.3
-
