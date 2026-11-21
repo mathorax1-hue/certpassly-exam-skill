@@ -1,0 +1,278 @@
+{
+ "exam_code": "QTYPE-FIXTURE",
+ "test_only": true,
+ "never_promote": true,
+ "note": "TEST FIXTURE. Synthetic questions, one per supported type, plus held cases.",
+ "questions": [
+  {
+   "question_key": "q001",
+   "type": "single_choice",
+   "answer_key": [
+    1
+   ],
+   "choices": [
+    "Block storage",
+    "Object storage",
+    "A message queue",
+    "A load balancer"
+   ]
+  },
+  {
+   "question_key": "q002",
+   "type": "multiple_select",
+   "answer_key": [
+    0,
+    2
+   ],
+   "choices": [
+    "Keyboard",
+    "Monitor",
+    "Mouse",
+    "Printer"
+   ]
+  },
+  {
+   "question_key": "q003",
+   "type": "true_false",
+   "answer_key": [
+    0
+   ],
+   "choices": [
+    "True",
+    "False"
+   ]
+  },
+  {
+   "question_key": "q004",
+   "type": "image_based_choice",
+   "answer_key": [
+    2
+   ],
+   "choices": [
+    "Running",
+    "Starting",
+    "Stopped",
+    "Deleted"
+   ]
+  },
+  {
+   "question_key": "q005",
+   "type": "scenario_standalone",
+   "answer_key": [
+    0
+   ],
+   "choices": [
+    "Measure the load on the server",
+    "Buy a second shop",
+    "Delete old orders",
+    "Turn off the server"
+   ]
+  },
+  {
+   "question_key": "q006",
+   "type": "yes_no_matrix",
+   "rows": [
+    "A router forwards packets between networks.",
+    "A switch stores files for users.",
+    "A firewall can block network traffic."
+   ],
+   "answer_key": {
+    "r1": "yes",
+    "r2": "no",
+    "r3": "yes"
+   }
+  },
+  {
+   "question_key": "q007",
+   "type": "single_choice_matrix",
+   "rows": [
+    "Run a batch job every night.",
+    "Keep backup copies of files.",
+    "Connect two office sites."
+   ],
+   "columns": [
+    "Storage",
+    "Compute",
+    "Network"
+   ],
+   "answer_key": {
+    "r1": "c2",
+    "r2": "c1",
+    "r3": "c3"
+   }
+  },
+  {
+   "question_key": "q008",
+   "type": "inline_dropdown",
+   "cloze": "To keep files, you should use [blank1] storage.",
+   "answer_key": {
+    "blank1": "blank1_o2"
+   },
+   "blank_options": {
+    "blank1": [
+     "queue",
+     "object",
+     "compute"
+    ]
+   }
+  },
+  {
+   "question_key": "q009",
+   "type": "multi_blank_dropdown",
+   "cloze": "A backup copy should be [blank1] A restore test should run [blank2]",
+   "answer_key": {
+    "blank1": "blank1_o1",
+    "blank2": "blank2_o2"
+   },
+   "blank_options": {
+    "blank1": [
+     "stored offsite",
+     "deleted daily"
+    ],
+    "blank2": [
+     "never",
+     "every month"
+    ]
+   }
+  },
+  {
+   "question_key": "q010",
+   "type": "ordering",
+   "ordering": [
+    "Upload the files",
+    "Write the page",
+    "Test the page",
+    "Share the link"
+   ],
+   "answer_key": [
+    1,
+    2,
+    0,
+    3
+   ]
+  },
+  {
+   "question_key": "q011",
+   "type": "matching",
+   "answer_key": {
+    "0": "0",
+    "1": "2",
+    "2": "1"
+   },
+   "matching_pairs": [
+    [
+     "Printer",
+     "Makes paper copies"
+    ],
+    [
+     "Scanner",
+     "Reads paper pages"
+    ],
+    [
+     "Speaker",
+     "Plays sound"
+    ]
+   ]
+  },
+  {
+   "question_key": "q012",
+   "type": "categorization",
+   "answer_key": {
+    "0": "0",
+    "1": "1",
+    "2": "1",
+    "3": "0"
+   },
+   "items": [
+    "Keyboard",
+    "Web browser",
+    "Text editor",
+    "Hard drive"
+   ],
+   "slots": [
+    "Hardware",
+    "Software"
+   ]
+  },
+  {
+   "question_key": "q013",
+   "type": "drag_drop",
+   "answer_key": {
+    "0": "1",
+    "1": "2",
+    "2": "0"
+   },
+   "items": [
+    "Hammer",
+    "Saw",
+    "Ruler"
+   ],
+   "slots": [
+    "Measure a board",
+    "Drive a nail",
+    "Cut a board"
+   ]
+  },
+  {
+   "question_key": "q014",
+   "type": "hotspot_single",
+   "regions": {
+    "h1": "Web Server",
+    "h2": "App Server",
+    "h3": "Database",
+    "h4": "Cache"
+   },
+   "answer_key": "h3"
+  },
+  {
+   "question_key": "q015",
+   "type": "hotspot_multi",
+   "regions": {
+    "h1": "Web Server",
+    "h2": "App Server",
+    "h3": "Database",
+    "h4": "Cache"
+   },
+   "answer_key": [
+    "h1",
+    "h2"
+   ]
+  },
+  {
+   "question_key": "q016",
+   "type": "case_study_group",
+   "answer_key": [
+    1
+   ],
+   "choices": [
+    "A message queue",
+    "Object storage",
+    "A load balancer"
+   ]
+  },
+  {
+   "question_key": "q017",
+   "type": "case_study_group",
+   "answer_key": [
+    0
+   ],
+   "choices": [
+    "List the files to move",
+    "Close one office",
+    "Buy new printers"
+   ]
+  },
+  {
+   "question_key": "q018",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "no type rule matched"
+  },
+  {
+   "question_key": "q019",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "ordering answer does not use every step"
+  }
+ ]
+}

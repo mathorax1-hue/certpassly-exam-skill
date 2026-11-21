@@ -68,5 +68,6 @@ The public three-phase workflow (and the disabled-by-default private fallback) c
 3. `v1.3.0-page-region-ai-vision.patch` adds the 400 dpi page-region retry and the AI vision hook (off by default; committed `ai-reads.json` files are still read). The AI acceptance rule uses high-confidence words from the original OCR passes, not a later failed retry.
 4. `v1.3.0-page-region-ai-vision2-groq.patch` adds the Groq provider. It stays off unless a private runner sets provider groq. Public exam dispatch stays refused and does not enable Groq.
 5. `v1.3.0-page-region-ai-vision3-groq-images.patch` stitches more than 3 held crops into one image, because the Qwen model rejects a request with more than 3 images, and prefers the 400 dpi crop files.
+6. `v1.3.0-question-type-builders.patch` reads every question type the site accepts from the PDF, scripts only: Yes/No and choice grids, drop-down answer areas, image hotspots, ordering, matching, categorization, drag and drop, scenario and case study groups. See [question types](QUESTION-TYPES.md).
 
 The fidelity coverage gate stays strict. The same patches are bundled for a push to `msaqlainhaneef1/certpassly-exam-pipeline`.

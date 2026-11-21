@@ -26,6 +26,24 @@ def _load(path: Path | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+TEST_FIXTURE_CODES = {"QTYPE-FIXTURE"}
+
+
+def is_test_fixture(exam: str, site_file: Path | None) -> bool:
+    """Synthetic test fixtures (tests/fixtures) are never promoted."""
+    code = (exam or "").upper()
+    if code in TEST_FIXTURE_CODES or code.startswith("TEST-FIXTURE"):
+        return True
+    try:
+        if site_file and site_file.is_file():
+            exam_obj = json.loads(site_file.read_text(encoding="utf-8")).get("exam") or {}
+            code = str(exam_obj.get("exam_code") or "").upper()
+            return code in TEST_FIXTURE_CODES or code.startswith("TEST-FIXTURE") or bool(exam_obj.get("test_only"))
+    except (ValueError, OSError, AttributeError):
+        return False
+    return False
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     reasons: list[str] = []
     worklist = _load(args.worklist)
@@ -67,6 +85,8 @@ def evaluate(args: argparse.Namespace) -> dict:
         reasons.append("site v2 file is missing")
     if not args.raw_commit or len(args.raw_commit) != 40:
         reasons.append("raw-exam commit sha is missing or not a full SHA")
+    if is_test_fixture(args.exam, args.site_file):
+        reasons.append("test-only fixture exam (never promote)")
     if not args.promote:
         reasons.append("promote flag was not set (auto promotion is forbidden)")
     status = "promoted" if not reasons and args.promote else "not_promoted"
