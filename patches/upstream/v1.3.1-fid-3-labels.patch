@@ -1,0 +1,32 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 29d0b95..acb08ec 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -777,6 +777,27 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+             cov_item = {'images': cov_images}
+         src |= token_set(ocr_words_text(cov_item, min_word=ocr_cfg.get('min_word_confidence')), cfg)
+     dest = token_set(export_text(question) if question else '', cfg)
++    # Answer-area chrome words are UI labels, not question words. When the
++    # answer-area layout was read, the item has an answer area, so the exact
++    # label words (Answer Area, Statements) and, for a yes/no grid, the Yes
++    # and No column headers are removed from the coverage source. Only label
++    # words the export does not contain are removed, so a real question word
++    # that happens to match a label word is never hidden and no extra word
++    # can appear. Without a layout nothing is removed.
++    area = (visual or {}).get('area') or {}
++    if area:
++        try:
++            import answer_area
++            aa_cfg = answer_area.config(cfg.get('ocr') or {})
++            label_words = set()
++            for label in aa_cfg.get('ui_labels') or []:
++                label_words |= token_set(label, cfg)
++            if area.get('kind') == 'yes_no_grid':
++                label_words |= token_set(' '.join(answer_area.YES_WORDS), cfg)
++                label_words |= token_set(' '.join(answer_area.NO_WORDS), cfg)
++            src -= (label_words - dest)
++        except Exception:
++            pass
+     cov = coverage_report(src, dest)
+     cov['pdf_text_normalized'] = pdf_text
+     if cfg.get('require_100_percent_coverage', True) and cov['missing_words']:
