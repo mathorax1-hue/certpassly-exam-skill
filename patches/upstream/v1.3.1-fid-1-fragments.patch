@@ -1,0 +1,120 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 12f4301..3d7e2a9 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -262,7 +262,62 @@ def check_pdf_coverage(item, question, cfg, deny=None):
+     return report
+ 
+ 
+-def check_image_ocr(ocr_item, cfg):
++def _word_conf(word):
++    try:
++        return float(word.get('conf'))
++    except (TypeError, ValueError):
++        return None
++
++
++def _is_fragment_word(word, neighbours, source_tokens, min_word):
++    """True when an OCR word is not a real word, so the confidence gate must not count it.
++
++    A word is a fragment only when it has no letter or digit token at all
++    (pure punctuation or glyphs), or when every token in it is a strict
++    substring of a token of an adjacent word that passed the word confidence
++    threshold. A real one or two letter word that appears in the PDF text is
++    never a fragment; without the PDF token set a short token is never
++    dropped on the substring rule.
++    """
++    text = (word or {}).get('text') or ''
++    toks = tokenize(text)
++    if not toks:
++        return True
++    for tok in toks:
++        if len(tok) <= 2 and (source_tokens is None or tok in source_tokens):
++            return False
++    for neighbour in neighbours or []:
++        if not isinstance(neighbour, dict):
++            continue
++        conf = _word_conf(neighbour)
++        if conf is None or conf < min_word:
++            continue
++        neighbour_toks = tokenize(neighbour.get('text') or '')
++        if not neighbour_toks:
++            continue
++        if all(any(tok != other and tok in other for other in neighbour_toks) for tok in toks):
++            return True
++    return False
++
++
++def _kept_ocr_words(words, source_tokens, min_word):
++    """OCR words that count in the confidence gate, with fragments removed."""
++    kept = []
++    for i, w in enumerate(words or []):
++        if not isinstance(w, dict):
++            continue
++        neighbours = []
++        if i > 0:
++            neighbours.append(words[i - 1])
++        if i + 1 < len(words):
++            neighbours.append(words[i + 1])
++        if _is_fragment_word(w, neighbours, source_tokens, min_word):
++            continue
++        kept.append(w)
++    return kept
++
++
++def check_image_ocr(ocr_item, cfg, source_tokens=None):
+     ocr_cfg = cfg.get('ocr') or {}
+     min_word = float(ocr_cfg.get('min_word_confidence', 90))
+     min_overall = float(ocr_cfg.get('min_overall_confidence', 95))
+@@ -282,14 +337,15 @@ def check_image_ocr(ocr_item, cfg):
+     overalls = []
+     disagree = []
+     for im in images:
+-        words = im.get('words') or []
++        # Fragments are not words: they take no part in any confidence
++        # statistic, so a glyph at low confidence cannot hold a question whose
++        # real words all pass. The 90 word and 95 overall thresholds are
++        # unchanged for every word that is kept.
++        words = _kept_ocr_words(im.get('words') or [], source_tokens, min_word)
+         confs = []
+         for w in words:
+-            if not isinstance(w, dict):
+-                continue
+-            try:
+-                c = float(w.get('conf'))
+-            except (TypeError, ValueError):
++            c = _word_conf(w)
++            if c is None:
+                 continue
+             confs.append(c)
+             if c < min_word:
+@@ -302,11 +358,15 @@ def check_image_ocr(ocr_item, cfg):
+                 overalls.append(float(im.get('mean_confidence')))
+             except (TypeError, ValueError):
+                 pass
+-        if im.get('min_confidence') is not None:
+-            try:
+-                mins.append(float(im['min_confidence']))
+-            except (TypeError, ValueError):
+-                pass
++            # No kept word confidences: fall back to the stored minimum, which
++            # is the only minimum available. When kept words exist the kept
++            # minimum above already covers it, and the stored value must not
++            # reintroduce a dropped fragment.
++            if im.get('min_confidence') is not None:
++                try:
++                    mins.append(float(im['min_confidence']))
++                except (TypeError, ValueError):
++                    pass
+         if require_agree and im.get('agree') is False:
+             disagree.append(im.get('file') or 'image')
+         passes = im.get('passes') or {}
+@@ -714,7 +774,7 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+     if cfg.get('forbid_extra_words', True) and cov['extra_words']:
+         reasons.append('extra words: %s' % ', '.join(cov['extra_words'][:40]))
+ 
+-    img = check_image_ocr(ocr_item, cfg)
++    img = check_image_ocr(ocr_item, cfg, source_tokens=token_set(pdf_text, cfg))
+     if not img['ok'] and img.get('reason'):
+         reasons.append(img['reason'])
+ 
