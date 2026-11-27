@@ -1,0 +1,112 @@
+diff --git a/config/question_type_rules.json b/config/question_type_rules.json
+index 49e0478..8f33a6b 100644
+--- a/config/question_type_rules.json
++++ b/config/question_type_rules.json
+@@ -85,6 +85,54 @@
+         "type the numeric value",
+         "enter a numeric answer"
+       ]
++    },
++    "lab_task": {
++      "patterns": [
++        "^LAB\\b",
++        "\\bsign in to the lab\\b",
++        "\\bin the lab\\b",
++        "\\bcomplete the lab\\b",
++        "\\blab task\\b"
++      ]
++    },
++    "code_answer": {
++      "patterns": [
++        "\\bwrite the code\\b",
++        "\\bcomplete the code\\b",
++        "\\bwrite a program\\b",
++        "\\bwrite the program\\b",
++        "\\bwrite a script\\b"
++      ]
++    },
++    "terminal_task": {
++      "patterns": [
++        "\\bin the terminal\\b",
++        "\\btype the command\\b",
++        "\\bat the command line\\b",
++        "\\bin the command prompt\\b"
++      ]
++    },
++    "simulation_ui": {
++      "patterns": [
++        "^SIMULATION\\b",
++        "\\bsimulation:\\b",
++        "\\bin the simulation\\b",
++        "\\busing the simulation\\b"
++      ]
++    },
++    "audio_response": {
++      "patterns": [
++        "\\brecord your answer\\b",
++        "\\bspeak your answer\\b",
++        "\\brecord a spoken\\b",
++        "\\brecord your response\\b"
++      ]
++    },
++    "long_answer": {
++      "patterns": [
++        "\\bwrite a long answer\\b",
++        "\\bwrite an essay\\b"
++      ]
+     }
+   },
+   "rules": [
+@@ -497,6 +545,7 @@
+     "text_cloze_unreadable": "the text has a text_cloze layout but it could not be read exactly: {why}",
+     "short_text_unreadable": "the text has a short_text layout but it could not be read exactly: {why}",
+     "numeric_unreadable": "the text has a numeric layout but it could not be read exactly: {why}",
+-    "multi_select_incomplete": "multi-select grid rows were not all marked reliably"
++    "multi_select_incomplete": "multi-select grid rows were not all marked reliably",
++    "reviewer_graded": "reviewer-graded type {type} is never auto-built from a PDF; held for human review"
+   }
+ }
+diff --git a/scripts/build_technical_export.py b/scripts/build_technical_export.py
+index c44199b..77f4b34 100644
+--- a/scripts/build_technical_export.py
++++ b/scripts/build_technical_export.py
+@@ -630,6 +630,13 @@ def export_one(item, visual, ocr_item, exam_code, domain, min_conf, fid_cfg=None
+             if item.get('_structure_hold'):
+                 hold['reason'] = item['_structure_hold'] + '; ' + hold['reason']
+                 gate['reason'] = hold['reason']
++            # A classifier hold is the deciding reason (for example a
++            # reviewer-graded type), so keep it in front of the fidelity
++            # reason instead of letting the gate reason hide it.
++            if result.get('held') and result.get('reason'):
++                if result['reason'] not in hold['reason']:
++                    hold['reason'] = result['reason'] + '; ' + hold['reason']
++                    gate['reason'] = hold['reason']
+             # Keep the built question so a later owner-correction path can
+             # export it after type and schema checks. The caller still treats
+             # a non-None hold as held unless it chooses otherwise.
+diff --git a/scripts/qtypes.py b/scripts/qtypes.py
+index 98fac51..89107aa 100644
+--- a/scripts/qtypes.py
++++ b/scripts/qtypes.py
+@@ -252,6 +252,21 @@ def classify_detailed(item, visual=None, ocr=None, rules=None, min_confidence=No
+     matched = [rule for rule in (rules.get('rules') or []) if _rule_matches(rule, item, visual, marks)]
+     matched_ids = [rule.get('id') for rule in matched]
+     hard_base = dict(matched_rules=matched_ids, markers=marks)
++    # Reviewer-graded types are never auto-built from a PDF. If the stem
++    # carries one of their markers, hold with that reason before any
++    # matching rule can assign a different (wrong) type. A lab or code
++    # item with lettered options would otherwise match single_choice.
++    reviewer_types = ('lab_task', 'code_answer', 'terminal_task',
++                      'simulation_ui', 'audio_response', 'long_answer')
++    for typ in reviewer_types:
++        if typ in marks:
++            template = (rules.get('hold') or {}).get(
++                'reviewer_graded',
++                'reviewer-graded type {type} is never auto-built from a PDF')
++            reason = template.replace('{type}', typ)
++            return dict(type=typ, reason=reason, held=True,
++                        hold_reasons=hold_notes + [reason],
++                        rule_id=None, **hard_base)
+     if hard and not (item.get('options') or {}):
+         # already returned above; keep matched_rules on that path too
+         pass
