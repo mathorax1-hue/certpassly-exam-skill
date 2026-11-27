@@ -1,0 +1,51 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 729cdba..97015e9 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -752,6 +752,21 @@ def _agreed_ocr_tokens(ocr_item, cfg):
+     return out
+ 
+ 
++def _single_pass_ocr_tokens(ocr_item, cfg):
++    """Tokens read by images with fewer than two OCR passes.
++
++    A single pass has no second read to confirm it, so its words are only
++    trusted on a screenshot-only page when the PDF text layer agrees with
++    them. Images with two or more passes contribute nothing here.
++    """
++    out = set()
++    for im in (ocr_item or {}).get('images') or []:
++        passes = im.get('passes') or {}
++        if len(passes) < 2:
++            out |= token_set(ocr_words_text({'images': [im]}), cfg)
++    return out
++
++
+ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+     """Run every fidelity check. Returns a report dict; export only when ok is True."""
+     reasons = []
+@@ -802,6 +817,7 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+     else:
+         src |= token_set(ocr_words_text(ocr_item), cfg)
+     cov_images = (ocr_item or {}).get('coverage_images')
++    cov_item = None
+     if cov_images:
+         # an earlier read of the same images: its confident words count as source words too
+         try:
+@@ -841,6 +857,16 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+         reasons.append('missing words: %s' % ', '.join(cov['missing_words'][:40]))
+     if cfg.get('forbid_extra_words', True) and cov['extra_words']:
+         reasons.append('extra words: %s' % ', '.join(cov['extra_words'][:40]))
++    # A screenshot-only page whose words come from a single OCR pass has no
++    # second read to confirm them, so it is held unless the page also has a
++    # PDF text layer that agrees with every word the single pass read.
++    if screenshot_only:
++        single_pass = _single_pass_ocr_tokens(ocr_item, cfg)
++        if cov_item is not None:
++            single_pass |= _single_pass_ocr_tokens(cov_item, cfg)
++        pdf_tokens = token_set(pdf_text, cfg)
++        if single_pass and not (pdf_tokens and single_pass <= pdf_tokens):
++            reasons.append('single_pass_source')
+ 
+     img = check_image_ocr(ocr_item, cfg, source_tokens=token_set(pdf_text, cfg))
+     if not img['ok'] and img.get('reason'):
