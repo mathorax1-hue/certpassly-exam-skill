@@ -23,6 +23,38 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def normalize_question_id(qid: str, exam_code: str = "") -> str:
+    """Return the exam-scoped form of a question ID.
+
+    Older indexes use short keys (q001) while newer exports use exam-scoped
+    keys (AB-730-q001). Both forms name the same question, so the change
+    classifier compares and stores the scoped form. An ID that already
+    carries a different exam prefix is left alone. With no exam code the
+    ID is returned unchanged.
+    """
+    qid = (qid or "").strip()
+    if not qid or not exam_code:
+        return qid
+    code = exam_code.strip()
+    if qid == code or qid.startswith(code + "-"):
+        return qid
+    if "-" in qid:
+        return qid
+    return "%s-%s" % (code, qid)
+
+
+def _has_choices(item: dict) -> bool:
+    """True when the identity payload carries at least one choice.
+
+    A fingerprint collision proves duplication only when the payload can
+    tell questions apart. Matrix and dropdown items read from page images
+    share one generic stem with no choices, so their fingerprints collide
+    even though they are different questions. Only a payload with choices
+    can prove two items are the same question.
+    """
+    return bool(item.get("has_choices"))
+
+
 def valid_exam_code(code: str) -> bool:
     return bool(code and EXAM_CODE_RE.fullmatch(code))
 
@@ -125,6 +157,7 @@ def item_from_site_question(q: dict) -> dict | None:
         "stem_fingerprint": stem_fp,
         "type": str(q.get("type") or ""),
         "origin": "exported",
+        "has_choices": bool([c for c in payload["choices"] if c]),
     }
 
 
@@ -153,6 +186,7 @@ def item_from_extracted(data: dict, question_id: str | None = None) -> dict | No
         "type": str(data.get("type") or ""),
         "origin": "extracted",
         "key_in_file": str(data.get("question_key") or data.get("id") or "").strip(),
+        "has_choices": bool([c for c in payload["choices"] if c]),
     }
 
 
@@ -191,18 +225,27 @@ def load_site_keys(run_dir: Path, exam_code: str) -> set[str]:
     return keys
 
 
-def export_status_for(file_id: str, key_in_file: str, held_keys: set[str], site_keys: set[str]) -> str:
+def export_status_for(file_id: str, key_in_file: str, held_keys: set[str], site_keys: set[str], exam_code: str = "") -> str:
     """Prefer the extracted file stem. A remapped question_key can collide with
     another item's held or exported ID, so it is only used to detect that this
     file's content was exported.
+
+    Keys are compared in exam-scoped form: the site file uses scoped keys
+    (AB-730-q001) while extracted file stems are short (q001). Without the
+    normalization every exported question reads as held.
     """
-    if file_id and file_id in held_keys:
+    norm = lambda k: normalize_question_id(k, exam_code)
+    file_id_n = norm(file_id)
+    key_n = norm(key_in_file)
+    held_n = {norm(k) for k in held_keys}
+    site_n = {norm(k) for k in site_keys}
+    if file_id_n and file_id_n in held_n:
         return "held"
-    if file_id and file_id in site_keys:
+    if file_id_n and file_id_n in site_n:
         return "exported"
-    if key_in_file and key_in_file in site_keys:
+    if key_n and key_n in site_n:
         return "exported"
-    if site_keys or held_keys:
+    if site_n or held_n:
         return "held"
     return ""
 
@@ -230,7 +273,7 @@ def load_items_from_run(run_dir: Path, exam_code: str) -> list[dict]:
             if not item or item["question_id"] in seen_ids:
                 continue
             item["export_status"] = export_status_for(
-                path.stem, item.get("key_in_file") or "", held_keys, site_keys
+                path.stem, item.get("key_in_file") or "", held_keys, site_keys, exam_code
             )
             items.append(item)
             seen_ids.add(item["question_id"])
@@ -261,42 +304,56 @@ def load_index(path: Path) -> dict:
     return data
 
 
-def next_question_id(used: set[str]) -> str:
+def next_question_id(used: set[str], exam_code: str = "") -> str:
     n = 1
     while True:
-        cand = "q%0*d" % (MIN_ID_WIDTH, n)
+        cand = normalize_question_id("q%0*d" % (MIN_ID_WIDTH, n), exam_code)
         if cand not in used:
             return cand
         n += 1
 
 
-def allocate_question_id(incoming_id: str, used_ids: set[str]) -> str:
-    """Keep the incoming PDF key when it is free. Never reuse a retired ID."""
-    cid = (incoming_id or "").strip()
+def allocate_question_id(incoming_id: str, used_ids: set[str], exam_code: str = "") -> str:
+    """Keep the incoming PDF key when it is free. Never reuse a retired ID.
+
+    IDs are compared and allocated in exam-scoped form, so a short incoming
+    key (q001) keeps its scoped form (AB-730-q001) and a generated ID never
+    collides with a scoped entry already in the index.
+    """
+    cid = normalize_question_id((incoming_id or "").strip(), exam_code)
     if cid and cid not in used_ids:
         return cid
-    return next_question_id(used_ids)
+    return next_question_id(used_ids, exam_code)
 
 
-def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
+def diff_items(previous: list[dict], incoming: list[dict], exam_code: str = "") -> dict:
     """Classify incoming items against the previous index.
 
-    Duplicates in the incoming batch (same full fingerprint) are kept once.
-    Retired previous IDs stay in the result with status retired.
+    Duplicates in the incoming batch (same full fingerprint, with real
+    content) are kept once. Retired previous IDs stay in the result with
+    status retired.
+
+    Question IDs are compared and stored in exam-scoped form: an old index
+    entry q001 and a new export entry AB-730-q001 are the same question.
+    With no exam code the IDs are used as given, exactly as before.
     """
     prev_active = [q for q in previous if (q.get("status") or "active") != "retired"]
     retired_prev = [q for q in previous if (q.get("status") or "") == "retired"]
-    used_ids = {q["question_id"] for q in previous if q.get("question_id")}
+    used_ids = {normalize_question_id(q["question_id"], exam_code) for q in previous if q.get("question_id")}
 
-    by_fp: dict[str, dict] = {}
+    by_fp: dict[str, list[dict]] = {}
     by_stem: dict[str, list[dict]] = {}
+    by_id: dict[str, dict] = {}
     for q in prev_active:
         fp = q.get("fingerprint") or ""
-        if fp and fp not in by_fp:
-            by_fp[fp] = q
+        if fp:
+            by_fp.setdefault(fp, []).append(q)
         stem = q.get("stem_fingerprint") or ""
         if stem:
             by_stem.setdefault(stem, []).append(q)
+        qid = normalize_question_id(q.get("question_id") or "", exam_code)
+        if qid and qid not in by_id:
+            by_id[qid] = q
 
     assigned_old: set[str] = set()
     seen_fp: set[str] = set()
@@ -305,7 +362,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
 
     for item in incoming:
         fp = item.get("fingerprint") or ""
-        if fp and fp in seen_fp:
+        if fp and fp in seen_fp and _has_choices(item):
             duplicates.append({
                 "fingerprint": fp,
                 "incoming_id": item.get("question_id"),
@@ -316,12 +373,16 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
         if fp:
             seen_fp.add(fp)
 
-        match = by_fp.get(fp) if fp else None
-        if match and match["question_id"] not in assigned_old:
+        match = None
+        for cand in by_fp.get(fp) or []:
+            if cand["question_id"] not in assigned_old:
+                match = cand
+                break
+        if match:
             prev_export = match.get("export_status") or ""
             new_export = item.get("export_status") or prev_export
             results.append({
-                "question_id": match["question_id"],
+                "question_id": normalize_question_id(match["question_id"], exam_code),
                 "incoming_id": item.get("question_id"),
                 "fingerprint": fp,
                 "stem_fingerprint": item.get("stem_fingerprint") or "",
@@ -336,6 +397,30 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
             continue
 
         stem = item.get("stem_fingerprint") or ""
+        # Same normalized question ID, different content: the question is
+        # the same slot in the exam, but what it asks changed. That is a
+        # change, not a retirement plus a new question. The ID is checked
+        # before the stem, so a stem match never steals a different
+        # question's slot. This is what makes a rebuild with no real change
+        # report everything as same even when the old index used short keys
+        # and the new export is scoped.
+        id_match = by_id.get(normalize_question_id(item.get("question_id") or "", exam_code))
+        if id_match and id_match["question_id"] not in assigned_old:
+            results.append({
+                "question_id": normalize_question_id(id_match["question_id"], exam_code),
+                "incoming_id": item.get("question_id"),
+                "fingerprint": fp,
+                "stem_fingerprint": stem,
+                "status": "changed",
+                "type": item.get("type") or id_match.get("type") or "",
+                "origin": item.get("origin") or "",
+                "export_status": item.get("export_status") or id_match.get("export_status") or "",
+                "previous_export_status": id_match.get("export_status") or "",
+                "export_status_changed": False,
+            })
+            assigned_old.add(id_match["question_id"])
+            continue
+
         stem_match = None
         for cand in by_stem.get(stem) or []:
             if cand["question_id"] not in assigned_old:
@@ -343,7 +428,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
                 break
         if stem_match:
             results.append({
-                "question_id": stem_match["question_id"],
+                "question_id": normalize_question_id(stem_match["question_id"], exam_code),
                 "incoming_id": item.get("question_id"),
                 "fingerprint": fp,
                 "stem_fingerprint": stem,
@@ -357,7 +442,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
             assigned_old.add(stem_match["question_id"])
             continue
 
-        new_id = allocate_question_id(item.get("question_id") or "", used_ids)
+        new_id = allocate_question_id(item.get("question_id") or "", used_ids, exam_code)
         used_ids.add(new_id)
         results.append({
             "question_id": new_id,
@@ -374,7 +459,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
     for q in prev_active:
         if q["question_id"] not in assigned_old:
             row = {
-                "question_id": q["question_id"],
+                "question_id": normalize_question_id(q["question_id"], exam_code),
                 "incoming_id": "",
                 "fingerprint": q.get("fingerprint") or "",
                 "stem_fingerprint": q.get("stem_fingerprint") or "",
@@ -390,7 +475,7 @@ def diff_items(previous: list[dict], incoming: list[dict]) -> dict:
     # Keep earlier retired rows in the index, unchanged.
     for q in retired_prev:
         results.append({
-            "question_id": q["question_id"],
+            "question_id": normalize_question_id(q["question_id"], exam_code),
             "incoming_id": "",
             "fingerprint": q.get("fingerprint") or "",
             "stem_fingerprint": q.get("stem_fingerprint") or "",
@@ -572,7 +657,7 @@ def process_run(exam_code: str, run_dir: Path, raw_dir: Path | None, reports_dir
     incoming = load_items_from_run(run_dir, exam_code)
     index_path = Path(raw_dir) / "questions-index.json" if raw_dir else run_dir / "questions-index.json"
     previous = [] if reset_index else (load_index(index_path).get("questions") or [])
-    result = diff_items(previous, incoming)
+    result = diff_items(previous, incoming, exam_code)
     version, sha = load_source_meta(raw_dir) if raw_dir else (None, "")
     reports = Path(reports_dir) if reports_dir else (run_dir / "phase-reports")
     if update_run_files:

@@ -70,24 +70,31 @@ class DiffTests(unittest.TestCase):
         self.prev = [qa, qb, qc]
 
     def test_changed_new_retired_and_same(self):
-        # Keep A same, change B (same stem, revised choice), drop C (retire), add D (new).
+        # Keep A same, change B (same stem, revised choice), replace C's
+        # content under the same ID (changed, not retired), add E (new),
+        # drop D (retire). ORDER-004: a matching question ID means the same
+        # question, so a content change under that ID is "changed".
+        qd = Q.item_from_site_question(site_question("q004", STEM_D, [CHOICE_1, CHOICE_3], [0]))
+        prev = self.prev + [qd]
         incoming = [
             Q.item_from_site_question(site_question("q001", STEM_A, [CHOICE_1, CHOICE_2], [0])),
             Q.item_from_site_question(site_question("q002", STEM_B, [CHOICE_1, CHOICE_2B], [1])),
-            Q.item_from_site_question(site_question("q003", STEM_D, [CHOICE_1, CHOICE_3], [0])),
+            Q.item_from_site_question(site_question("q003", STEM_D, [CHOICE_2, CHOICE_3], [1])),
+            Q.item_from_site_question(site_question("q005", STEM_A, [CHOICE_1, CHOICE_2], [1])),
         ]
-        result = Q.diff_items(self.prev, incoming)
+        result = Q.diff_items(prev, incoming)
         by_id = {r["question_id"]: r for r in result["items"]}
         self.assertEqual(result["counts"]["same"], 1)
-        self.assertEqual(result["counts"]["changed"], 1)
+        self.assertEqual(result["counts"]["changed"], 2)
         self.assertEqual(result["counts"]["new"], 1)
         self.assertEqual(result["counts"]["retired"], 1)
         self.assertEqual(by_id["q001"]["status"], "same")
         self.assertEqual(by_id["q002"]["status"], "changed")
-        self.assertEqual(by_id["q003"]["status"], "retired")
+        self.assertEqual(by_id["q003"]["status"], "changed")
+        self.assertEqual(by_id["q004"]["status"], "retired")
         new_rows = [r for r in result["items"] if r["status"] == "new"]
         self.assertEqual(len(new_rows), 1)
-        self.assertEqual(new_rows[0]["question_id"], "q004")
+        self.assertEqual(new_rows[0]["question_id"], "q005")
         self.assertNotEqual(new_rows[0]["question_id"], "q003")
 
     def test_does_not_reuse_retired_id(self):
@@ -119,6 +126,48 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["incoming_id"], "tmp7")
         self.assertEqual(result["items"][0]["status"], "changed")
 
+    def test_old_short_index_plus_new_scoped_export_is_same(self):
+        # ORDER-004 Phase 1: an old index with short keys (q001) plus a new
+        # export with exam-scoped keys must report everything as same.
+        code = "TEST-UPDATE-B"
+        prev = [
+            Q.item_from_site_question(site_question("q001", STEM_A, [CHOICE_1, CHOICE_2], [0])),
+            Q.item_from_site_question(site_question("q002", STEM_B, [CHOICE_1, CHOICE_2], [1])),
+            Q.item_from_site_question(site_question("q003", STEM_C, [CHOICE_1, CHOICE_2], [0])),
+        ]
+        incoming = [
+            Q.item_from_site_question(site_question("TEST-UPDATE-B-q001", STEM_A, [CHOICE_1, CHOICE_2], [0])),
+            Q.item_from_site_question(site_question("TEST-UPDATE-B-q002", STEM_B, [CHOICE_1, CHOICE_2], [1])),
+            Q.item_from_site_question(site_question("TEST-UPDATE-B-q003", STEM_C, [CHOICE_1, CHOICE_2], [0])),
+        ]
+        result = Q.diff_items(prev, incoming, code)
+        self.assertEqual(result["counts"]["same"], 3)
+        self.assertEqual(result["counts"]["new"], 0)
+        self.assertEqual(result["counts"]["duplicate"], 0)
+        self.assertEqual(result["counts"]["retired"], 0)
+        self.assertEqual(
+            {r["question_id"] for r in result["items"]},
+            {"TEST-UPDATE-B-q001", "TEST-UPDATE-B-q002", "TEST-UPDATE-B-q003"},
+        )
+
+    def test_degenerate_fingerprint_is_not_duplicate(self):
+        # Dropdown and matrix items read from page images share one generic
+        # extracted stem with no options and no answer. They are different
+        # questions, not duplicates.
+        generic = "TEST-UPDATE-B hotspot generic stem"
+        a = Q.item_from_extracted({"question_key": "q004", "stem": generic, "options": {}, "answer_raw": ""})
+        b = Q.item_from_extracted({"question_key": "q005", "stem": generic, "options": {}, "answer_raw": ""})
+        self.assertEqual(a["fingerprint"], b["fingerprint"])
+        result = Q.diff_items([], [a, b])
+        self.assertEqual(result["counts"]["duplicate"], 0)
+        self.assertEqual(result["counts"]["new"], 2)
+
+    def test_new_id_is_scoped(self):
+        item = Q.item_from_site_question(site_question("q009", STEM_D, [CHOICE_1, CHOICE_3], [0]))
+        result = Q.diff_items([], [item], "TEST-UPDATE-B")
+        self.assertEqual(result["items"][0]["question_id"], "TEST-UPDATE-B-q009")
+        self.assertEqual(result["items"][0]["status"], "new")
+
 
 class ProcessRunTests(unittest.TestCase):
     def test_process_run_writes_leak_safe_report_and_index(self):
@@ -146,9 +195,9 @@ class ProcessRunTests(unittest.TestCase):
         ])
         result = Q.process_run("TEST-UPDATE-B", run_dir, raw, run_dir / "phase-reports")
         self.assertEqual(result["counts"]["same"], 1)
-        self.assertEqual(result["counts"]["changed"], 1)
-        self.assertEqual(result["counts"]["new"], 1)
-        self.assertEqual(result["counts"]["retired"], 1)
+        self.assertEqual(result["counts"]["changed"], 2)
+        self.assertEqual(result["counts"]["new"], 0)
+        self.assertEqual(result["counts"]["retired"], 0)
         self.assertEqual(result["counts"]["duplicate"], 1)
         report = json.loads((run_dir / "phase-reports" / "change-report.json").read_text(encoding="utf-8"))
         md = (run_dir / "phase-reports" / "change-report.md").read_text(encoding="utf-8")
@@ -156,10 +205,14 @@ class ProcessRunTests(unittest.TestCase):
         for text in (STEM_A, STEM_B, STEM_C, STEM_D, CHOICE_1, CHOICE_2, CHOICE_2B, CHOICE_3):
             self.assertNotIn(text, blob)
         statuses = {row["question_id"]: row["status"] for row in report["items"]}
-        self.assertEqual(statuses["q001"], "same")
-        self.assertEqual(statuses["q002"], "changed")
-        self.assertEqual(statuses["q003"], "retired")
-        self.assertEqual(statuses["q004"], "new")
+        # IDs are stored in exam-scoped form (ORDER-004 Phase 1). The q003
+        # site item has new content under the same ID, so it is "changed",
+        # not a retirement plus a new question. The q004 site item repeats
+        # q001's content, so it is a duplicate.
+        self.assertEqual(statuses["TEST-UPDATE-B-q001"], "same")
+        self.assertEqual(statuses["TEST-UPDATE-B-q002"], "changed")
+        self.assertEqual(statuses["TEST-UPDATE-B-q003"], "changed")
+        self.assertEqual([d["incoming_id"] for d in report["duplicates"]], ["q004"])
 
 
 
@@ -254,6 +307,25 @@ class IdentityStabilityTests(unittest.TestCase):
         self.assertEqual(Q.export_status_for("q048", "q080", held, site), "exported")
         self.assertEqual(Q.export_status_for("q080", "q079", held, site), "held")
         self.assertEqual(Q.export_status_for("q263", "q262", set(), {"q262", "q264"}), "exported")
+
+    def test_export_status_scoped_site_key_matches_short_file_stem(self):
+        # ORDER-004 Phase 1: the site file uses scoped keys (AB-730-q001)
+        # while extracted file stems are short (q001). Exported must not
+        # read as held.
+        self.assertEqual(
+            Q.export_status_for("q048", "q048", set(), {"TEST-UPDATE-B-q048"}, "TEST-UPDATE-B"),
+            "exported",
+        )
+        self.assertEqual(
+            Q.export_status_for("q048", "q048", {"TEST-UPDATE-B-q048"}, set(), "TEST-UPDATE-B"),
+            "held",
+        )
+
+    def test_normalize_question_id(self):
+        self.assertEqual(Q.normalize_question_id("q001", "AB-730"), "AB-730-q001")
+        self.assertEqual(Q.normalize_question_id("AB-730-q001", "AB-730"), "AB-730-q001")
+        self.assertEqual(Q.normalize_question_id("q001", ""), "q001")
+        self.assertEqual(Q.normalize_question_id("KCNA-q001", "AB-730"), "KCNA-q001")
 
     def test_site_type_change_does_not_retire_when_extracted_matches(self):
         prev = Q.item_from_extracted({
