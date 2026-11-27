@@ -1,0 +1,64 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 3d7e2a9..29d0b95 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -367,23 +367,33 @@ def check_image_ocr(ocr_item, cfg, source_tokens=None):
+                     mins.append(float(im['min_confidence']))
+                 except (TypeError, ValueError):
+                     pass
+-        if require_agree and im.get('agree') is False:
+-            disagree.append(im.get('file') or 'image')
++    # Pass agreement is recomputed here from the pass texts, so a stored flag
++    # computed order-sensitively by older OCR data cannot hold a question
++    # whose passes read the same words in a different order. Two passes
++    # agree when they read the same multiset of words: reading order is
++    # never compared, because different page modes read columns in a
++    # different order, but a repeated word in one pass and not the other is
++    # still a disagreement. With fewer than two passes there is nothing to
++    # recompute from, so the stored flag is the only agreement signal.
++    recomputed = []
++    for im in images:
+         passes = im.get('passes') or {}
+         if require_agree and len(passes) >= 2:
+             norms = []
+             for p in passes.values():
+                 txt = (p.get('text') if isinstance(p, dict) else '') or ''
+-                toks = tokenize(txt, cfg)
+-                if im.get('scoped'):
+-                    # answer-area grids: columns are read in a different order by
+-                    # different page modes, so compare the words, not their order
+-                    toks = sorted(toks)
+-                norms.append(' '.join(toks))
+-            if len(set(norms)) > 1:
++                norms.append(' '.join(sorted(tokenize(txt, cfg))))
++            ok = len(set(norms)) <= 1
++            recomputed.append(ok)
++            if not ok:
+                 disagree.append(im.get('file') or 'image')
++        elif require_agree and im.get('agree') is False:
++            recomputed.append(False)
++            disagree.append(im.get('file') or 'image')
++        else:
++            recomputed.append(True)
+     item_agree = (ocr_item or {}).get('agree')
+-    if require_agree and item_agree is False:
++    if require_agree and item_agree is False and not (recomputed and all(recomputed)):
+         disagree.append('item')
+     min_w = min(mins) if mins else (ocr_item or {}).get('min_confidence')
+     overall = None
+diff --git a/scripts/ocr_extract.py b/scripts/ocr_extract.py
+index 595b644..24bd068 100644
+--- a/scripts/ocr_extract.py
++++ b/scripts/ocr_extract.py
+@@ -77,7 +77,10 @@ def _words_from_lines(lines):
+ 
+ 
+ def _norm_ocr_text(text):
+-    return ' '.join(re.findall(r'[A-Za-z0-9]+', (text or '').lower()))
++    # Two passes agree when they read the same words. Reading order is not
++    # compared, because different page modes read columns in a different
++    # order, so the norm is the sorted token multiset.
++    return ' '.join(sorted(re.findall(r'[A-Za-z0-9]+', (text or '').lower())))
+ 
+ 
+ def ocr_pass(path, cfg, spec):
