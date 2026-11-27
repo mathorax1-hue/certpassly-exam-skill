@@ -1,0 +1,15 @@
+diff --git a/scripts/text_repair.py b/scripts/text_repair.py
+index 23cc69a..80cc228 100644
+--- a/scripts/text_repair.py
++++ b/scripts/text_repair.py
+@@ -123,7 +123,9 @@ def repair(text: str, data=None):
+         return t
+ 
+     # Glyph lost at the start of a word: "the rst", "les", "ngerprint". Lower case only.
+-    text = re.sub(r'(?<![A-Za-z\-])([a-z]{2,})(?![A-Za-z\-])', lead, text)
++    # A token right after a digit is an ordinal suffix (1st, 2nd, 3rd), not a
++    # word missing a leading ligature, so digits are excluded on both sides.
++    text = re.sub(r'(?<![A-Za-z0-9\-])([a-z]{2,})(?![A-Za-z0-9\-])', lead, text)
+     return text, changes
+ 
+ 
