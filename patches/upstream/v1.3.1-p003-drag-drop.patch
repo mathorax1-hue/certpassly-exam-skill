@@ -1,0 +1,142 @@
+diff --git a/reference/site-format/v2/question.schema.json b/reference/site-format/v2/question.schema.json
+--- a/reference/site-format/v2/question.schema.json
++++ b/reference/site-format/v2/question.schema.json
+index 04a9cfa..ab9c6d8 100644
+@@ -26,6 +26,41 @@
+       "type": "string",
+       "pattern": "^(?![\\s\\S]*<\\s*[A-Za-z!/?])[\\s\\S]*$"
+     },
++    "drag_slot": {
++      "description": "One drag_drop target slot: an id and a label, with optional shape and coordinates normalised 0 to 1.",
++      "type": "object",
++      "additionalProperties": false,
++      "required": [
++        "id",
++        "label"
++      ],
++      "properties": {
++        "id": {
++          "type": "string",
++          "pattern": "^[A-Za-z0-9_-]+$"
++        },
++        "label": {
++          "$ref": "#/$defs/plain_text"
++        },
++        "shape": {
++          "enum": [
++            "rect",
++            "circle",
++            "polygon"
++          ]
++        },
++        "coords": {
++          "type": "array",
++          "items": {
++            "type": "number",
++            "minimum": 0,
++            "maximum": 1
++          },
++          "minItems": 3,
++          "maxItems": 64
++        }
++      }
++    },
+     "inline": {
+       "type": "object",
+       "additionalProperties": false,
+@@ -345,9 +380,19 @@
+         "drag_slots": {
+           "type": "array",
+           "items": {
+-            "$ref": "#/$defs/plain_text"
++            "anyOf": [
++              {
++                "$ref": "#/$defs/plain_text"
++              },
++              {
++                "$ref": "#/$defs/drag_slot"
++              }
++            ]
+           }
+         },
++        "prompt_template": {
++          "$ref": "#/$defs/plain_text"
++        },
+         "hotspot_regions": {
+           "type": "array",
+           "items": {
+diff --git a/scripts/export_question_v2.py b/scripts/export_question_v2.py
+index 38e6a63..cac4310 100755
+--- a/scripts/export_question_v2.py
++++ b/scripts/export_question_v2.py
+@@ -444,6 +444,39 @@ def cloze_interaction(content: dict, typ: str) -> dict:
+     return {'cloze': {'segments': segments, 'blanks': blanks_out}, '_option_id_map': option_id_map}
+ 
+ 
++def drag_slot_out(slot, index):
++    """One drag_drop slot as the site expects it. A plain string stays a
++    string. An object keeps its id and label, with optional shape and
++    coords. Coords follow the hotspot rule: every number must be in 0..1,
++    otherwise the coords are dropped and only id and label are kept."""
++    if not isinstance(slot, dict):
++        return str(slot) or ' '
++    out = {
++        'id': str(slot.get('id') or f'slot{index + 1}'),
++        'label': (slot.get('label') or slot.get('text')
++                  or str(slot.get('id') or '') or ' '),
++    }
++    shape = slot.get('shape')
++    if isinstance(shape, str) and shape in ('rect', 'circle', 'polygon'):
++        out['shape'] = shape
++    coords = slot.get('coords') or slot.get('normalized_coordinates') or []
++    nums = []
++    ok = True
++    for c in coords:
++        try:
++            n = float(c)
++        except (TypeError, ValueError):
++            ok = False
++            break
++        if n < 0 or n > 1:
++            ok = False
++            break
++        nums.append(n)
++    if ok and nums:
++        out['coords'] = nums
++    return out
++
++
+ def hotspot_regions(content: dict) -> list[dict]:
+     out = []
+     for region in content.get('regions') or []:
+@@ -717,9 +750,11 @@ def export_item(item: dict, domain_names: dict[str, str] | None = None) -> dict:
+         slots = content.get('slots') or content.get('drag_slots') or []
+         if slots:
+             interaction['drag_slots'] = [
+-                (s.get('label') or s.get('text') or s.get('id') if isinstance(s, dict) else str(s)) or ' '
+-                for s in slots
++                drag_slot_out(s, i) for i, s in enumerate(slots)
+             ]
++        tmpl = content.get('prompt_template') or ''
++        if tmpl:
++            interaction['prompt_template'] = tmpl
+ 
+     if table_blocks:
+         learner['content_blocks'] = table_blocks
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 97015e9..27ebc02 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -192,7 +192,11 @@ def export_text(question):
+         for t in pair or []:
+             parts.append(_plain_rich(t))
+     for t in inter.get('drag_slots') or []:
+-        parts.append(_plain_rich(t))
++        if isinstance(t, dict):
++            # object slots carry their label; a plain string is the label
++            parts.append(_plain_rich(t.get('label') or t.get('text') or ''))
++        else:
++            parts.append(_plain_rich(t))
+     for r in inter.get('hotspot_regions') or []:
+         if isinstance(r, dict):
+             parts.append(_plain_rich(r.get('label') or ''))
