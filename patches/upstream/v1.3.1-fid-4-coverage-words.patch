@@ -1,0 +1,32 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index acb08ec..a294649 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -761,11 +761,15 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+         ocr_item, scope = answer_area.scope_ocr_item(ocr_item, visual)
+     except Exception:
+         scope = None
+-    # coverage uses union of PDF tokens and high-confidence OCR tokens
++    # coverage uses union of PDF tokens and OCR tokens. Every OCR word
++    # counts, whatever its confidence: a real word the OCR read at low
++    # confidence is still a word the question contains, so it must not make
++    # the export look as if it added a word. The confidence gate stays
++    # exactly as strict in check_image_ocr below; coverage never excuses
++    # a word below 90.
+     pdf_text = source_pdf_text(item, cfg, deny=deny)
+     src = token_set(pdf_text, cfg)
+-    ocr_cfg = cfg.get('ocr') or {}
+-    ocr_text = ocr_words_text(ocr_item, min_word=ocr_cfg.get('min_word_confidence'))
++    ocr_text = ocr_words_text(ocr_item)
+     src |= token_set(ocr_text, cfg)
+     cov_images = (ocr_item or {}).get('coverage_images')
+     if cov_images:
+@@ -775,7 +779,7 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+             cov_item, _ = answer_area.scope_ocr_item({'images': cov_images}, visual)
+         except Exception:
+             cov_item = {'images': cov_images}
+-        src |= token_set(ocr_words_text(cov_item, min_word=ocr_cfg.get('min_word_confidence')), cfg)
++        src |= token_set(ocr_words_text(cov_item), cfg)
+     dest = token_set(export_text(question) if question else '', cfg)
+     # Answer-area chrome words are UI labels, not question words. When the
+     # answer-area layout was read, the item has an answer area, so the exact
