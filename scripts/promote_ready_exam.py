@@ -27,7 +27,7 @@ def _load(path: Path | None) -> dict:
 
 
 TEST_FIXTURE_CODES = {"QTYPE-FIXTURE"}
-STAGING_TYPES = {"multi_select_matrix", "text_cloze", "short_text", "numeric"}
+STAGING_TYPES = {"active_screen", "multimedia_stimulus", "testlet"}  # registry staging list; the four former staging types are publishable now
 STAGING_TAG = "staging_draft_only"
 
 

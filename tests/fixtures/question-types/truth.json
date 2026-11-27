@@ -266,7 +266,7 @@
    "question_key": "q018",
    "type": null,
    "held": true,
-   "hold_reason_contains": "no type rule matched"
+   "hold_reason_contains": "reviewer-graded type lab_task"
   },
   {
    "question_key": "q019",
@@ -298,8 +298,7 @@
     "r3": [
      "c3"
     ]
-   },
-   "staging_draft_only": true
+   }
   },
   {
    "question_key": "q021",
@@ -307,8 +306,7 @@
    "answer_key": {
     "blank1": "object",
     "blank2": "router"
-   },
-   "staging_draft_only": true
+   }
   },
   {
    "question_key": "q022",
@@ -319,8 +317,7 @@
      "Dynamic Host Configuration Protocol"
     ],
     "match": "text"
-   },
-   "staging_draft_only": true
+   }
   },
   {
    "question_key": "q023",
@@ -330,8 +327,7 @@
     "unit": "ms",
     "tolerance": "0.5",
     "tolerance_type": "absolute"
-   },
-   "staging_draft_only": true
+   }
   },
   {
    "question_key": "q024",
@@ -356,6 +352,12 @@
    "type": null,
    "held": true,
    "hold_reason_contains": "answer key is not certain"
+  },
+  {
+   "question_key": "q028",
+   "type": null,
+   "held": true,
+   "hold_reason_contains": "reviewer-graded type lab_task"
   }
  ]
 }

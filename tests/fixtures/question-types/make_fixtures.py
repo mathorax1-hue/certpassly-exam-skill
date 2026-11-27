@@ -234,7 +234,7 @@ SPEC = [
     {'type': 'case_study_group',
      'stem': ['Case Study: Fabrikam', 'Question: What should Fabrikam do first?'],
      'options': ['List the files to move', 'Close one office', 'Buy new printers'], 'answer': 'A'},
-    {'type': None, 'expect_hold': 'no type rule matched',
+    {'type': None, 'expect_hold': 'reviewer-graded type lab_task',
      'stem': ['LAB -', 'Simulation: sign in to the lab and set up the network as described.'],
      'options': [], 'answer': ''},
     {'type': None, 'expect_hold': 'ordering answer does not use every step',
@@ -276,6 +276,11 @@ SPEC = [
      'columns': ['Storage', 'Compute', 'Network'],
      'rows': [{'text': 'Run a batch job every night.', 'answer': ['Compute']},
               {'text': 'Keep backup copies of files.', 'answer': []}]},
+    {'type': None, 'expect_hold': 'reviewer-graded type lab_task',
+     'stem': ['LAB -', 'Sign in to the lab and create a user account.'],
+     'options': ['Create the account in the portal', 'Delete the account',
+                 'Reset the password', 'Assign a licence'],
+     'answer': 'A'},
 ]
 
 
@@ -308,17 +313,13 @@ def truth_for(i, s):
                 r['answer'] if isinstance(r['answer'], (list, tuple)) else [r['answer']])]
             for j, r in enumerate(s['rows'])
         }
-        t['staging_draft_only'] = True
     elif typ == 'text_cloze':
         # two blank sentences after the instruction line
         t['answer_key'] = {'blank1': 'object', 'blank2': 'router'}
-        t['staging_draft_only'] = True
     elif typ == 'short_text':
         t['answer_key'] = {'accepted': ['DHCP', 'Dynamic Host Configuration Protocol'], 'match': 'text'}
-        t['staging_draft_only'] = True
     elif typ == 'numeric':
         t['answer_key'] = {'value': '10', 'unit': 'ms', 'tolerance': '0.5', 'tolerance_type': 'absolute'}
-        t['staging_draft_only'] = True
     elif typ in ('inline_dropdown', 'multi_blank_dropdown'):
         segs = []
         key = {}

@@ -83,9 +83,13 @@ def run_pipeline(upstream: Path, pdf: Path, work: Path, exam: str) -> Path:
 SINGLE = {'single_choice', 'true_false', 'inline_dropdown', 'image_based_choice', 'hotspot_single'}
 SETS = {'multiple_select', 'hotspot_multi'}
 PUBLISHABLE = ['single_choice', 'multiple_select', 'true_false', 'image_based_choice', 'scenario_standalone',
-               'yes_no_matrix', 'single_choice_matrix', 'inline_dropdown', 'multi_blank_dropdown', 'ordering',
-               'matching', 'categorization', 'drag_drop', 'hotspot_single', 'hotspot_multi', 'case_study_group']
-STAGING = ['multi_select_matrix', 'text_cloze', 'short_text', 'numeric']
+               'yes_no_matrix', 'single_choice_matrix', 'multi_select_matrix', 'inline_dropdown',
+               'multi_blank_dropdown', 'text_cloze', 'ordering', 'matching', 'categorization', 'drag_drop',
+               'hotspot_single', 'hotspot_multi', 'case_study_group', 'short_text', 'numeric']
+# No fixture type is staging any more: the four former staging types are
+# publishable, and active_screen has no fixture. The registry still lists
+# active_screen, multimedia_stimulus and testlet as staging.
+STAGING = []
 STAGING_TAG = 'staging_draft_only'
 
 
