@@ -1,0 +1,64 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index a294649..729cdba 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -731,6 +731,27 @@ def _keys_equivalent(a, b, typ):
+     return str(a) == str(b)
+ 
+ 
++def _agreed_ocr_tokens(ocr_item, cfg):
++    """Tokens every OCR pass of an image read: the words both passes agree on.
++
++    An image with fewer than two passes has no second read to agree with,
++    so its words count as read.
++    """
++    out = set()
++    for im in (ocr_item or {}).get('images') or []:
++        passes = im.get('passes') or {}
++        if len(passes) >= 2:
++            sets = [token_set((p.get('text') if isinstance(p, dict) else '') or '', cfg)
++                    for p in passes.values()]
++            agreed = sets[0]
++            for s in sets[1:]:
++                agreed &= s
++            out |= agreed
++        else:
++            out |= token_set(ocr_words_text({'images': [im]}), cfg)
++    return out
++
++
+ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+     """Run every fidelity check. Returns a report dict; export only when ok is True."""
+     reasons = []
+@@ -769,8 +790,17 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+     # a word below 90.
+     pdf_text = source_pdf_text(item, cfg, deny=deny)
+     src = token_set(pdf_text, cfg)
+-    ocr_text = ocr_words_text(ocr_item)
+-    src |= token_set(ocr_text, cfg)
++    # When the page is a screenshot, the page image OCR is the only source
++    # of the question words, so it counts only where both OCR passes agree
++    # on it. That is the case when the PDF text block is empty, and when no
++    # question could be built at all: there is no export to compare against,
++    # so a word one pass read and the other did not must not be reported as
++    # missing. Otherwise every OCR word counts (see above).
++    screenshot_only = not src or question is None
++    if screenshot_only:
++        src |= _agreed_ocr_tokens(ocr_item, cfg)
++    else:
++        src |= token_set(ocr_words_text(ocr_item), cfg)
+     cov_images = (ocr_item or {}).get('coverage_images')
+     if cov_images:
+         # an earlier read of the same images: its confident words count as source words too
+@@ -779,7 +809,10 @@ def evaluate(item, question, result, ocr_item, visual, cfg, deny=None):
+             cov_item, _ = answer_area.scope_ocr_item({'images': cov_images}, visual)
+         except Exception:
+             cov_item = {'images': cov_images}
+-        src |= token_set(ocr_words_text(cov_item), cfg)
++        if screenshot_only:
++            src |= _agreed_ocr_tokens(cov_item, cfg)
++        else:
++            src |= token_set(ocr_words_text(cov_item), cfg)
+     dest = token_set(export_text(question) if question else '', cfg)
+     # Answer-area chrome words are UI labels, not question words. When the
+     # answer-area layout was read, the item has an answer area, so the exact
