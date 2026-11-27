@@ -1,0 +1,50 @@
+diff --git a/scripts/extract_owner_pdf.py b/scripts/extract_owner_pdf.py
+index 7170600..f61cce8 100644
+--- a/scripts/extract_owner_pdf.py
++++ b/scripts/extract_owner_pdf.py
+@@ -33,10 +33,10 @@ AFTER_EXACT = {
+ }
+ 
+ OPTION_PATTERNS = [
+-    re.compile(r'^([A-F])\.(?:\s+(.*))?$'),
+-    re.compile(r'^([A-F])\)(?:\s+(.*))?$'),
+-    re.compile(r'^\(([A-F])\)(?:\s+(.*))?$'),
+-    re.compile(r'^([A-F]):(?:\s+(.*))?$'),
++    re.compile(r'^([A-H])\.(?:\s+(.*))?$'),
++    re.compile(r'^([A-H])\)(?:\s+(.*))?$'),
++    re.compile(r'^\(([A-H])\)(?:\s+(.*))?$'),
++    re.compile(r'^([A-H]):(?:\s+(.*))?$'),
+ ]
+ 
+ 
+diff --git a/scripts/text_structures.py b/scripts/text_structures.py
+index ae1bd66..7816a6a 100644
+--- a/scripts/text_structures.py
++++ b/scripts/text_structures.py
+@@ -31,7 +31,7 @@ import re
+ 
+ NUM_LINE = re.compile(r'^(\d{1,2})[.)]\s+(.+)$')
+ PAIR = re.compile(r'(\d{1,2})\s*(?:-|:|=|->|\u2192|>)\s*([A-Fa-f])\b')
+-LETTERS = re.compile(r'[A-F]')
++LETTERS = re.compile(r'[A-H]')
+ 
+ MARKERS = {
+     'ordering': re.compile(r'\b(correct|right|proper)\s+(order|sequence)\b|\barrange\b|\bin\s+sequence\b', re.I),
+@@ -63,7 +63,7 @@ def _stem_lines(item):
+     opts = item.get('options') or {}
+     out = []
+     for l in lines:
+-        if re.match(r'^\(?[A-F][.):]\s', l) or re.match(r'^\(?[A-F][.):]$', l):
++        if re.match(r'^\(?[A-H][.):]\s', l) or re.match(r'^\(?[A-H][.):]$', l):
+             if opts:
+                 break
+         out.append(l)
+@@ -256,7 +256,7 @@ def parse_case_member(item):
+         return None, 'case study question has no Question: line'
+     q_lines = []
+     for l in lines[qi:]:
+-        if re.match(r'^\(?[A-F][.):](\s|$)', l):
++        if re.match(r'^\(?[A-H][.):](\s|$)', l):
+             break
+         q_lines.append(l)
+     question = re.sub(r'^Question\s*:\s*', '', ' '.join(q_lines), flags=re.I).strip()
