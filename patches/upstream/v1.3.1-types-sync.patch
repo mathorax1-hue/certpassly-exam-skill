@@ -1,0 +1,167 @@
+diff --git a/reference/site-format/v2/question_types.json b/reference/site-format/v2/question_types.json
+index 13b5074..39b1c9a 100644
+--- a/reference/site-format/v2/question_types.json
++++ b/reference/site-format/v2/question_types.json
+@@ -1,7 +1,7 @@
+ {
+   "site_format_version": "v2",
+   "source_schema_version": "question.v1",
+-  "source_path_note": "Parsed from the site config/question_types.php (read-only). The enum is exactly these 30 keys.",
++  "source_path_note": "Parsed from the site config/question_types.php (read-only). The enum is exactly these 32 keys.",
+   "aliases": {
+     "multiple_choice": "multiple_select",
+     "multi_select": "multiple_select",
+@@ -100,7 +100,7 @@
+       "scorer": "matrix",
+       "renderer": "matrix",
+       "enabled": true,
+-      "publishable": false,
++      "publishable": true,
+       "auto_grade": true,
+       "uses_options": false
+     },
+@@ -133,7 +133,7 @@
+       "scorer": "normalized_text",
+       "renderer": "dropdown-blanks",
+       "enabled": true,
+-      "publishable": false,
++      "publishable": true,
+       "auto_grade": true,
+       "uses_options": false
+     },
+@@ -233,7 +233,7 @@
+       "scorer": "normalized_text",
+       "renderer": "constructed-input",
+       "enabled": true,
+-      "publishable": false,
++      "publishable": true,
+       "auto_grade": true,
+       "uses_options": false
+     },
+@@ -244,7 +244,7 @@
+       "scorer": "numeric",
+       "renderer": "constructed-input",
+       "enabled": true,
+-      "publishable": false,
++      "publishable": true,
+       "auto_grade": true,
+       "uses_options": false
+     },
+@@ -355,6 +355,28 @@
+       "auto_grade": false,
+       "uses_options": false,
+       "container": true
++    },
++    "audio_response": {
++      "key": "audio_response",
++      "family": "constructed",
++      "priority": "P3",
++      "scorer": "reviewer",
++      "renderer": "audio-input",
++      "enabled": false,
++      "publishable": false,
++      "auto_grade": false,
++      "uses_options": false
++    },
++    "long_answer": {
++      "key": "long_answer",
++      "family": "constructed",
++      "priority": "P3",
++      "scorer": "reviewer",
++      "renderer": "constructed-input",
++      "enabled": false,
++      "publishable": false,
++      "auto_grade": false,
++      "uses_options": false
+     }
+   },
+   "lists": {
+@@ -388,7 +410,9 @@
+       "terminal_task",
+       "lab_task",
+       "code_answer",
+-      "testlet"
++      "testlet",
++      "audio_response",
++      "long_answer"
+     ],
+     "publishable": [
+       "single_choice",
+@@ -406,14 +430,14 @@
+       "drag_drop",
+       "hotspot_single",
+       "hotspot_multi",
+-      "case_study_group"
+-    ],
+-    "staging": [
++      "case_study_group",
+       "multi_select_matrix",
+       "text_cloze",
+-      "active_screen",
+       "short_text",
+-      "numeric",
++      "numeric"
++    ],
++    "staging": [
++      "active_screen",
+       "multimedia_stimulus",
+       "testlet"
+     ],
+@@ -424,14 +448,16 @@
+       "simulation_ui",
+       "terminal_task",
+       "lab_task",
+-      "code_answer"
++      "code_answer",
++      "audio_response",
++      "long_answer"
+     ]
+   },
+   "counts": {
+-    "types": 30,
+-    "publishable": 16,
+-    "staging": 7,
+-    "blocked": 7
++    "types": 32,
++    "publishable": 20,
++    "staging": 3,
++    "blocked": 9
+   },
+   "source_sha256": "16208a5aeb8e29432351452a9a6c823f17ae3f8cc80fa2d0e529ffa667a08f70",
+   "source_bytes": 9191
+diff --git a/scripts/check_bank.py b/scripts/check_bank.py
+index ab768e3..c6794e1 100644
+--- a/scripts/check_bank.py
++++ b/scripts/check_bank.py
+@@ -68,6 +68,8 @@ DEFAULT_TYPES = [
+     "lab_task",
+     "code_answer",
+     "testlet",
++    "audio_response",
++    "long_answer",
+ ]
+ DEFAULT_ALIASES = {
+     "multiple_choice": "multiple_select",
+diff --git a/scripts/validate_question_v2.py b/scripts/validate_question_v2.py
+index 9a3ffcd..96508ff 100755
+--- a/scripts/validate_question_v2.py
++++ b/scripts/validate_question_v2.py
+@@ -4,7 +4,7 @@
+ Uses reference/site-format/v2/question.schema.json (the site's own schema).
+ Adds checks the site importer also applies: no HTML in strings, no answer
+ fields in the learner part, scoring_excluded when status is answer_not_found,
+-duplicate stems, repeated ids, and the 30-type registry.
++duplicate stems, repeated ids, and the registry.
+ 
+ v2 rejects the v1 status spelling as_in_source_file. Use scripts/migrate_v1_to_v2.py
+ to map a v1 bank first.
+@@ -134,7 +134,8 @@ def check_registry(q: dict, registry, path: str) -> list[str]:
+         return []
+     if typ in aliases:
+         return [f'{path}: registry mismatch: type {typ!r} is an alias for {aliases[typ]!r}; use the canonical key']
+-    return [f'{path}: registry mismatch: type {typ!r} is not in the 30-key enum']
++    count = len(registry.get('types') or {})
++    return [f'{path}: registry mismatch: type {typ!r} is not in the {count}-key enum']
+ 
+ 
+ def text_of_stem(stem) -> str:
