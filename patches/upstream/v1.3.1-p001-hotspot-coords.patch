@@ -1,0 +1,59 @@
+diff --git a/scripts/export_question_v2.py b/scripts/export_question_v2.py
+index 7f32a24..86e2219 100755
+--- a/scripts/export_question_v2.py
++++ b/scripts/export_question_v2.py
+@@ -449,13 +449,22 @@ def hotspot_regions(content: dict) -> list[dict]:
+     for region in content.get('regions') or []:
+         coords = region.get('normalized_coordinates') or region.get('coords') or []
+         nums = []
++        measurable = True
+         for c in coords:
+             try:
+-                nums.append(float(c))
++                n = float(c)
+             except (TypeError, ValueError):
+-                continue
+-        # clamp 0..1
+-        nums = [0.0 if n < 0 else (1.0 if n > 1 else n) for n in nums]
++                # a coordinate that is not a number is not measurable
++                measurable = False
++                break
++            if n < 0 or n > 1:
++                # never clamp: a coordinate outside 0..1 is not measurable,
++                # so the region is skipped instead of inventing a click area
++                measurable = False
++                break
++            nums.append(n)
++        if not measurable:
++            continue
+         shape = region.get('shape') or 'rect'
+         if shape == 'rect' and len(nums) != 4:
+             # pad or trim to 4 if we have something
+@@ -655,6 +664,7 @@ def export_item(item: dict, domain_names: dict[str, str] | None = None) -> dict:
+     if aks == 'answer_not_found':
+         scoring = True
+     reviewer = bool(item.get('human_review_required') or item.get('reviewer_needed'))
++    hotspot_unsure = False
+     opts = options(item)
+     content = content_of(item)
+     prompt = item.get('prompt_text') or content.get('prompt') or ''
+@@ -691,6 +701,10 @@ def export_item(item: dict, domain_names: dict[str, str] | None = None) -> dict:
+         regions = hotspot_regions(content)
+         if regions:
+             interaction['hotspot_regions'] = regions
++        if len(regions) < len(content.get('regions') or []):
++            # a region was skipped because its coordinates were not
++            # measurable: the item is unsure and needs a human to look
++            hotspot_unsure = True
+     elif typ == 'ordering':
+         items = content.get('items') or content.get('ordering') or []
+         if items:
+@@ -738,7 +752,7 @@ def export_item(item: dict, domain_names: dict[str, str] | None = None) -> dict:
+         'answer_key': map_answer_key(item, typ, opts),
+         'status': aks,
+         'scoring_excluded': bool(scoring),
+-        'reviewer_needed': bool(reviewer),
++        'reviewer_needed': bool(reviewer or hotspot_unsure),
+     }
+     if source:
+         answer['source'] = source
