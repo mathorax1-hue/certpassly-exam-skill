@@ -1,0 +1,87 @@
+diff --git a/config/ocr.json b/config/ocr.json
+index 8be253c..b8690f7 100644
+--- a/config/ocr.json
++++ b/config/ocr.json
+@@ -44,7 +44,7 @@
+         "name": "green",
+         "h_min": 40,
+         "h_max": 85,
+-        "s_min": 60,
++        "s_min": 30,
+         "s_max": 255,
+         "v_min": 80,
+         "v_max": 255
+diff --git a/scripts/analyze_visual.py b/scripts/analyze_visual.py
+index 1cf40eb..979c9e8 100644
+--- a/scripts/analyze_visual.py
++++ b/scripts/analyze_visual.py
+@@ -165,6 +165,11 @@ def read_answer_area(d, L, img_path, media, aimgs, methods, W, H, cfg, stem=''):
+         'marker_box': methods.get('marker_box') or [],
+         'checked_box': methods.get('checked_box') or [],
+         'ring_loop': A.ring_marks(apath),
++        # Highlight is a colour method: a pale green fill is a mark. It is
++        # wired in here so it can agree with image_diff (a different family)
++        # and the key can be set. A noisy highlight that does not give exactly
++        # one marked cell per row does not vote and cannot veto.
++        'highlight': methods.get('highlight') or [],
+     }
+     diff, info = A.diff_marks(img_path, apath, acfg)
+     marks['image_diff'] = diff
+diff --git a/scripts/answer_area.py b/scripts/answer_area.py
+index e5a5534..7504c3d 100644
+--- a/scripts/answer_area.py
++++ b/scripts/answer_area.py
+@@ -27,6 +27,7 @@ import numpy as np
+ DEFAULTS = {
+     'max_aspect_delta': 0.03,
+     'diff_threshold': 60,
++    'diff_green_threshold': 15,
+     'diff_min_area_px': 40,
+     'diff_max_changed_ratio': 0.12,
+     'control_min_px': 8,
+@@ -70,6 +71,25 @@ def _gray(path):
+     return cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+ 
+ 
++def _color(path):
++    if not path or not os.path.isfile(path):
++        return None
++    return cv2.imread(path, cv2.IMREAD_COLOR)
++
++
++def _greenness(bgr):
++    """Green excess: G minus the larger of R and B, per pixel.
++
++    A pale green fill (the usual correct-answer wash) is almost invisible in
++    grayscale but stands out here: about 29 for the fill, about 0 for white
++    paper and for near-neutral text.
++    """
++    b = bgr[:, :, 0].astype(np.float32)
++    g = bgr[:, :, 1].astype(np.float32)
++    r = bgr[:, :, 2].astype(np.float32)
++    return g - np.maximum(r, b)
++
++
+ # ---------------------------------------------------------------- alignment
+ 
+ def aligned_pair(qpath, apath, cfg=None):
+@@ -103,6 +123,19 @@ def diff_marks(qpath, apath, cfg=None):
+     ab = cv2.GaussianBlur(a, (3, 3), 0)
+     d = cv2.absdiff(qb, ab)
+     m = (d > int(cfg.get('diff_threshold', 60))).astype(np.uint8)
++    # A pale green fill is almost invisible in grayscale (max difference
++    # about 53, below the 60 threshold) but clear in green excess. Union the
++    # green-excess mask with the grayscale mask so the fill counts as a mark.
++    # The answer image is scaled to the question image the same way as above.
++    qc = _color(qpath)
++    ac = _color(apath)
++    if qc is not None and ac is not None:
++        ah, aw = ac.shape[:2]
++        ac2 = cv2.resize(ac, (W, H), interpolation=cv2.INTER_AREA if aw > W else cv2.INTER_CUBIC)
++        gq = cv2.GaussianBlur(_greenness(qc), (3, 3), 0)
++        ga = cv2.GaussianBlur(_greenness(ac2), (3, 3), 0)
++        mg = ((ga - gq) > float(cfg.get('diff_green_threshold', 15))).astype(np.uint8)
++        m = np.maximum(m, mg)
+     changed = float(m.mean())
+     info['changed_ratio'] = round(changed, 4)
+     if changed > float(cfg.get('diff_max_changed_ratio', 0.12)):

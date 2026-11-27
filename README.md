@@ -77,7 +77,7 @@ The release authority must remain in a protected private GitHub environment, not
 
 The current end-to-end path is documented in [the three-phase workflow](docs/THREE-PHASE.md). A local site-import check (sandbox only, never site code on GitHub) is `RAW_EXAM_ROOT=/path/to/raw-exam tools/import-check/run_import_check.sh [EXAM_CODE ...]`. It runs `--grade-all` in `/workspace/import-sandbox` and writes counts-only JSON under `results/<EXAM-CODE>/import-check.json` in raw-exam.
 
-Shared version is 0.2.19, with upstream v1.3.1.
+Shared version is 0.2.20, with upstream v1.3.1.
 
 Read [`SKILL.md`](SKILL.md), [`AGENTS.md`](AGENTS.md), [`docs/OPERATIONS.md`](docs/OPERATIONS.md), and [`knowledge/AB900-LESSONS.md`](knowledge/AB900-LESSONS.md). **New AI sessions must begin with the [canonical recovery and reusable-tool registry](docs/AI-SESSION-RECOVERY.md)** and the private handover linked from it. This repository is now the requested destination for all new shared skills, tooling, tests, and sanitized failure lessons.
 

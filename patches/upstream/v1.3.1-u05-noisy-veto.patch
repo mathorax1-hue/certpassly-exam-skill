@@ -1,0 +1,67 @@
+diff --git a/scripts/analyze_visual.py b/scripts/analyze_visual.py
+index 979c9e8..92e56a1 100644
+--- a/scripts/analyze_visual.py
++++ b/scripts/analyze_visual.py
+@@ -95,6 +95,51 @@ def _marks_every_cell(key_m, layout):
+     return all(set(v or []) == cols for v in key_m.values())
+ 
+ 
++def _noisy_detail(detail):
++    """True when a method's marks are mostly outside the cells or choices.
++
++    A detector that reads text letters as boxes puts most of its marks
++    outside any cell (for example 100 outside and 4 inside). Its key is a
++    guess from the few marks that happen to fall in cells. The 3x bar is
++    conservative: noise here is 20x or more, a real method with a few stray
++    marks is under 2x. The matrix detail names the inside count
++    marks_in_cells, the dropdown detail names it marks_on_choices.
++    """
++    inside = int(
++        (detail or {}).get('marks_in_cells')
++        or (detail or {}).get('marks_on_choices')
++        or 0
++    )
++    outside = int((detail or {}).get('marks_outside') or 0)
++    return outside > 3 * max(1, inside)
++
++
++def _drop_noisy_disagreements(key_by_method, method_detail):
++    """Drop a noisy method's key only when the methods disagree.
++
++    When every method that voted agrees, nothing is dropped: a noisy-looking
++    method that agrees with the others is still a real vote, and dropping it
++    could break the two-method agreement. When the methods disagree, the
++    keys from methods whose marks are mostly outside the cells are dropped,
++    because they are the noise that vetoes the methods that read the real
++    marks. Returns the filtered key map.
++    """
++    present = {n: v for n, v in (key_by_method or {}).items() if v}
++    groups = {}
++    for n, v in present.items():
++        groups.setdefault(json.dumps(v, sort_keys=True), []).append(n)
++    if len(groups) <= 1:
++        return key_by_method
++    kept = {
++        n: v
++        for n, v in present.items()
++        if not _noisy_detail((method_detail or {}).get(n))
++    }
++    if not kept:
++        return key_by_method
++    return kept
++
++
+ def _agreed(key_by_method, want=2):
+     """Key shared by methods from at least `want` pixel families, and no method disagrees."""
+     present = {n: v for n, v in key_by_method.items() if v}
+@@ -217,6 +262,10 @@ def read_answer_area(d, L, img_path, media, aimgs, methods, W, H, cfg, stem=''):
+             if key:
+                 d['key_by_method'][mname] = key
+     d['method_detail'] = detail
++    # If the methods disagree, drop the keys from noisy methods (marks mostly
++    # outside the cells) before asking whether the rest agree. A noisy method
++    # that agrees with the others is left alone.
++    d['key_by_method'] = _drop_noisy_disagreements(d['key_by_method'], detail)
+     agreed, names = _agreed(d['key_by_method'], int(acfg.get('min_agreeing_methods', 2)))
+     d['key'] = agreed if agreed else ({} if name != 'hotspot' else [])
+     d['key_methods'] = names if agreed else []
