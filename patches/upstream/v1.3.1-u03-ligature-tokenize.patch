@@ -1,0 +1,17 @@
+diff --git a/scripts/fidelity.py b/scripts/fidelity.py
+index 27ebc02..503a142 100644
+--- a/scripts/fidelity.py
++++ b/scripts/fidelity.py
+@@ -96,6 +96,12 @@ def tokenize(text, cfg=None):
+     cfg = cfg or {}
+     pat = cfg.get('token_pattern') or DEFAULT_TOKEN
+     raw = text_repair.expand_typographic_ligatures(text or '')
++    # Join ligature fragments ("speci c", "de ne", "rst") back into the whole
++    # word before tokenising. A PDF text layer that lost the "fi" glyph and
++    # an export that has the whole word then compare equal, so a question is
++    # not held for missing/extra words that are only a ligature loss. The
++    # repair is a no-op on complete words and never touches ordinals ("2nd").
++    raw, _changes = text_repair.repair(raw)
+     if not cfg.get('case_sensitive'):
+         raw = raw.lower()
+     return re.findall(pat, raw)
