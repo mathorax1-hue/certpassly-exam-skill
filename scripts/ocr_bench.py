@@ -15,9 +15,11 @@ Models, all optional and each guarded so a missing model does not fail the run:
   works again, so images go through doctr.io as before.
 - florence2: microsoft/Florence-2-base via transformers. The remote code is
   older than transformers 4.57, so it loads with attn_implementation="eager"
-  and trust_remote_code=True. If that still fails, the native port
-  "florence-community/Florence-2-base" with AutoModelForImageTextToText is
-  the fallback. Needs einops and timm installed (the workflow installs them).
+  and trust_remote_code=True. It loads in float32, not bf16: on the CPU
+  runner bf16 weights clash with the float32 inputs. If that still fails,
+  the native port "florence-community/Florence-2-base" with
+  AutoModelForImageTextToText is the fallback. Needs einops and timm
+  installed (the workflow installs them).
 - smoldocling: ds4sd/SmolDocling-256M-preview via transformers. It is an
   Idefics3 vision-language model, so it loads with AutoModelForImageTextToText,
   not AutoModelForCausalLM. The prompt must carry an image token, so it is
@@ -228,7 +230,8 @@ def _run_hf_model(model_id: str, image: Path, prompt: str,
                   chat_template: bool = False,
                   attn_eager: bool = False,
                   trust_remote: bool = True,
-                  max_side: int = 0) -> tuple[str, float]:
+                  max_side: int = 0,
+                  dtype: str = "bf16") -> tuple[str, float]:
     """Generic Hugging Face vision model runner. Returns text and 0.0 confidence
     (these models do not report per-word confidence).
     model_class is "causal_lm" (Florence-2, GOT-OCR) or "image_text_to_text"
@@ -238,7 +241,10 @@ def _run_hf_model(model_id: str, image: Path, prompt: str,
     and Qwen2-VL need so the image token count matches the image count.
     attn_eager loads with attn_implementation="eager" (Florence-2 remote code
     is older than transformers 4.57 and has no _supports_sdpa). max_side
-    resizes the image so its long side is at most that many pixels."""
+    resizes the image so its long side is at most that many pixels. dtype
+    is "bf16" except Florence-2, which loads in float32: on the CPU runner
+    its bf16 weights clash with the float32 inputs ("Input type (float) and
+    bias type (c10::BFloat16) should be the same")."""
     import torch
     from PIL import Image
     from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
@@ -249,7 +255,8 @@ def _run_hf_model(model_id: str, image: Path, prompt: str,
         img = img.resize((int(img.size[0] * scale), int(img.size[1] * scale)))
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote)
     cls = AutoModelForImageTextToText if model_class == "image_text_to_text" else AutoModelForCausalLM
-    kwargs = {"trust_remote_code": trust_remote, "torch_dtype": torch.bfloat16}
+    torch_dtype = torch.float32 if dtype == "fp32" else torch.bfloat16
+    kwargs = {"trust_remote_code": trust_remote, "torch_dtype": torch_dtype}
     if attn_eager:
         kwargs["attn_implementation"] = "eager"
     model = cls.from_pretrained(model_id, **kwargs)
@@ -294,16 +301,17 @@ RUNNERS = {
 }
 
 # (model id, prompt, model class, chat_template, attn_eager, trust_remote,
-#  max_side). Florence-2 and GOT-OCR load as a causal LM. SmolDocling
+#  max_side, dtype). Florence-2 and GOT-OCR load as a causal LM. SmolDocling
 # (Idefics3) and Qwen2-VL load as an image-text-to-text model; AutoModelFor-
 # CausalLM does not recognise their config class. SmolDocling and Qwen2-VL
 # need the chat template so the image token is present. GOT-OCR uses the
-# native -hf repo (the plain repo has no processor class).
+# native -hf repo (the plain repo has no processor class). Florence-2 loads
+# in float32, not bf16 (CPU dtype clash, see _run_hf_model).
 HF_MODELS = {
-    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm", False, True, True, 0),
-    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0),
-    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "", "image_text_to_text", False, False, False, 0),
-    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024),
+    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm", False, True, True, 0, "fp32"),
+    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0, "bf16"),
+    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "", "image_text_to_text", False, False, False, 0, "bf16"),
+    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024, "bf16"),
 }
 
 
@@ -315,9 +323,9 @@ def run_model(model: str, image: Path) -> dict:
         if model in RUNNERS:
             text, conf = RUNNERS[model](image)
         elif model in HF_MODELS:
-            model_id, prompt, model_class, chat_template, attn_eager, trust_remote, max_side = HF_MODELS[model]
+            model_id, prompt, model_class, chat_template, attn_eager, trust_remote, max_side, dtype = HF_MODELS[model]
             text, conf = _run_hf_model(model_id, image, prompt, model_class,
-                                       chat_template, attn_eager, trust_remote, max_side)
+                                       chat_template, attn_eager, trust_remote, max_side, dtype)
         else:
             return {"model": model, "error": f"unknown model {model}"}
     except Exception as exc:  # noqa: BLE001 - record the failure and continue

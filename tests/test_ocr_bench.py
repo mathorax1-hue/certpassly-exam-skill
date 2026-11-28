@@ -157,12 +157,15 @@ def _install_fake_hf(monkeypatch) -> _FakeProcessor:
     proc = _FakeProcessor()
     fake_torch = types.ModuleType("torch")
     fake_torch.bfloat16 = "bfloat16"
+    fake_torch.float32 = "float32"
     fake_torch.no_grad = _FakeNoGrad
     fake_tr = types.ModuleType("transformers")
+    load_kwargs: dict = {}
 
     class _Auto:
         @staticmethod
         def from_pretrained(model_id, **kwargs):
+            load_kwargs.update(kwargs)
             return _FakeModel()
 
     fake_tr.AutoModelForCausalLM = _Auto
@@ -176,7 +179,22 @@ def _install_fake_hf(monkeypatch) -> _FakeProcessor:
     fake_tr.AutoProcessor = _AutoProc
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", fake_tr)
+    proc.load_kwargs = load_kwargs
     return proc
+
+
+def test_florence2_loads_in_float32(monkeypatch, tmp_path: Path) -> None:
+    """Florence-2 must load in float32: bf16 weights clash with the float32
+    inputs on the CPU runner (RuntimeError in run 46131887562)."""
+    proc = _install_fake_hf(monkeypatch)
+    _make_image(tmp_path / "grid.png")
+    model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["florence2"]
+    assert dtype == "fp32"
+    text, _conf = ocr_bench._run_hf_model(
+        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
+    assert proc.load_kwargs.get("torch_dtype") == "float32"
+    assert proc.load_kwargs.get("attn_implementation") == "eager"
+    assert text == "decoded-7"
 
 
 def test_gotocr_calls_processor_without_text(monkeypatch, tmp_path: Path) -> None:
@@ -184,10 +202,10 @@ def test_gotocr_calls_processor_without_text(monkeypatch, tmp_path: Path) -> Non
     passing text would drop them, so the runner must call it images-only."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
-    model_id, prompt, model_class, chat, eager, remote, side = ocr_bench.HF_MODELS["gotocr"]
+    model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["gotocr"]
     assert prompt == ""
     text, _conf = ocr_bench._run_hf_model(
-        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side)
+        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
     assert proc.calls and proc.calls[0]["text"] is None
     assert text == "decoded-7"
 
@@ -197,9 +215,9 @@ def test_chat_template_decodes_generated_tokens_only(monkeypatch, tmp_path: Path
     chat-formatted prompt echo, or word counts are inflated."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
-    model_id, prompt, model_class, chat, eager, remote, side = ocr_bench.HF_MODELS["smoldocling"]
+    model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["smoldocling"]
     assert chat is True
     text, _conf = ocr_bench._run_hf_model(
-        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side)
+        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
     assert proc.calls and (proc.calls[0]["text"] or "").startswith("CHAT:")
     assert text == "decoded-7"
