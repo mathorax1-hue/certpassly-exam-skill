@@ -8,12 +8,20 @@ Models, all optional and each guarded so a missing model does not fail the run:
 - tesseract: system Tesseract, psm 6 (primary engine).
 - rapidocr: rapidocr-onnxruntime (ONNX, fallback engine).
 - paddleocr: paddleocr 2.8.1 with paddlepaddle 2.6.2 (pin avoids the OneDNN error
-  seen with paddleocr 3.7.0 and paddlepaddle 3.3.1).
-- doctr: docTR (PyTorch).
-- florence2: microsoft/Florence-2-base via transformers.
-- smoldocling: ds4sd/SmolDocling-256M-preview via transformers.
-- gotocr: stepfun-ai/GOT-OCR2_0 via transformers.
-- qwen2vl: Qwen/Qwen2-VL-2B-Instruct via transformers, int8 or bf16 if it fits.
+  seen with paddleocr 3.7.0 and paddlepaddle 3.3.1). Uses the 2.x ocr() API;
+  predict() is a 3.x addition and does not exist in 2.8.1.
+- doctr: docTR 1.9.0 (PyTorch). doctr.io was removed in 1.9.0, so images are
+  passed as numpy arrays, not through DocumentFile.
+- florence2: microsoft/Florence-2-base via transformers. Needs einops and timm
+  installed (the workflow installs them).
+- smoldocling: ds4sd/SmolDocling-256M-preview via transformers. It is an
+  Idefics3 vision-language model, so it loads with AutoModelForImageTextToText,
+  not AutoModelForCausalLM.
+- gotocr: stepfun-ai/GOT-OCR2_0 via transformers. Needs verovio installed
+  (the workflow installs it).
+- qwen2vl: Qwen/Qwen2-VL-2B-Instruct via transformers, bf16 if it fits. It is
+  a vision-language model, so it loads with AutoModelForImageTextToText.
+  The workflow also installs accelerate and qwen-vl-utils.
 
 Structure scoring. For each image the manifest names a kind. The script checks
 whether the model output contains the structural markers for that kind:
@@ -162,22 +170,32 @@ def _run_paddleocr(image: Path) -> tuple[str, float]:
     from paddleocr import PaddleOCR
 
     ocr = PaddleOCR(lang="en", use_textline_orientation=False)
-    out = ocr.predict(str(image))
-    res = out[0] if out else None
-    texts = list(getattr(res, "rec_texts", []) or [])
-    scores = list(getattr(res, "rec_scores", []) or [])
+    # PaddleOCR 2.8.1 has no predict() method (that is a 3.x addition).
+    # The 2.x API is ocr(), which returns a list with one entry per image,
+    # each a list of [box, (text, score)] pairs.
+    out = ocr.ocr(str(image))
+    texts = []
+    scores = []
+    if out and out[0]:
+        for _box, (text, score) in out[0]:
+            texts.append(text)
+            scores.append(float(score))
     text = " ".join(texts)
     conf = round(sum(scores) / len(scores) * 100.0, 1) if scores else 0.0
     return text, conf
 
 
 def _run_doctr(image: Path) -> tuple[str, float]:
-    from doctr.io import DocumentFile
+    # docTR 1.9.0 has no doctr.io module (DocumentFile was removed).
+    # Load the image with PIL and pass a numpy array to the predictor,
+    # which accepts a list of images directly.
+    import numpy as np
+    from PIL import Image
     from doctr.models import ocr_predictor
 
     predictor = ocr_predictor(pretrained=True)
-    doc = DocumentFile.from_images([str(image)])
-    result = predictor(doc)
+    arr = np.array(Image.open(image).convert("RGB"))
+    result = predictor([arr])
     texts = []
     confs = []
     for page in result.pages:
@@ -191,16 +209,21 @@ def _run_doctr(image: Path) -> tuple[str, float]:
     return text, conf
 
 
-def _run_hf_model(model_id: str, image: Path, prompt: str) -> tuple[str, float]:
+def _run_hf_model(model_id: str, image: Path, prompt: str,
+                  model_class: str = "causal_lm") -> tuple[str, float]:
     """Generic Hugging Face vision model runner. Returns text and 0.0 confidence
-    (these models do not report per-word confidence)."""
+    (these models do not report per-word confidence).
+    model_class is "causal_lm" (Florence-2, GOT-OCR) or "image_text_to_text"
+    (SmolDocling and Qwen2-VL, which are vision-language models whose config
+    AutoModelForCausalLM does not recognise)."""
     import torch
     from PIL import Image
-    from transformers import AutoModelForCausalLM, AutoProcessor
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
 
     img = Image.open(image).convert("RGB")
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
+    cls = AutoModelForImageTextToText if model_class == "image_text_to_text" else AutoModelForCausalLM
+    model = cls.from_pretrained(
         model_id, trust_remote_code=True, torch_dtype=torch.bfloat16,
     )
     model.eval()
@@ -221,11 +244,14 @@ RUNNERS = {
     "doctr": _run_doctr,
 }
 
+# (model id, prompt, model class). Florence-2 and GOT-OCR load as a causal LM.
+# SmolDocling (Idefics3) and Qwen2-VL load as an image-text-to-text model;
+# AutoModelForCausalLM does not recognise their config class.
 HF_MODELS = {
-    "florence2": ("microsoft/Florence-2-base", "<OCR>"),
-    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to markdown."),
-    "gotocr": ("stepfun-ai/GOT-OCR2_0", "OCR:"),
-    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image."),
+    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm"),
+    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to markdown.", "image_text_to_text"),
+    "gotocr": ("stepfun-ai/GOT-OCR2_0", "OCR:", "causal_lm"),
+    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text"),
 }
 
 
@@ -237,8 +263,8 @@ def run_model(model: str, image: Path) -> dict:
         if model in RUNNERS:
             text, conf = RUNNERS[model](image)
         elif model in HF_MODELS:
-            model_id, prompt = HF_MODELS[model]
-            text, conf = _run_hf_model(model_id, image, prompt)
+            model_id, prompt, model_class = HF_MODELS[model]
+            text, conf = _run_hf_model(model_id, image, prompt, model_class)
         else:
             return {"model": model, "error": f"unknown model {model}"}
     except Exception as exc:  # noqa: BLE001 - record the failure and continue
