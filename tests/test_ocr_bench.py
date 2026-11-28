@@ -190,21 +190,25 @@ def _install_fake_hf(monkeypatch) -> _FakeProcessor:
     return proc
 
 
-def test_florence2_loads_in_float32(monkeypatch, tmp_path: Path) -> None:
-    """Florence-2 must load in float32: bf16 weights clash with the float32
-    inputs on the CPU runner (RuntimeError in run 46131887562). Passing
-    torch_dtype alone does not fix it, because the remote code leaves some
-    layers in bf16, so the runner must also call model.float()."""
+def test_florence2_uses_native_port(monkeypatch, tmp_path: Path) -> None:
+    """Florence-2 must use the native florence-community port. The microsoft
+    remote code leaves some layers in bf16 and fails on the CPU runner with
+    a dtype mismatch even after model.float() (RuntimeError in run
+    46133244718). The native port loads with AutoModelForImageTextToText,
+    no trust_remote_code and no attn_implementation override."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
     _FakeModel.floated = False
     model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["florence2"]
-    assert dtype == "fp32"
+    assert model_id == "florence-community/Florence-2-base"
+    assert model_class == "image_text_to_text"
+    assert remote is False
+    assert eager is False
     text, _conf = ocr_bench._run_hf_model(
         model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
-    assert proc.load_kwargs.get("torch_dtype") == "float32"
-    assert proc.load_kwargs.get("attn_implementation") == "eager"
-    assert _FakeModel.floated is True
+    assert proc.load_kwargs.get("torch_dtype") == "bfloat16"
+    assert "attn_implementation" not in proc.load_kwargs
+    assert _FakeModel.floated is False
     assert text == "decoded-7"
 
 

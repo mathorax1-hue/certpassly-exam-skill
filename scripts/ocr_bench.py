@@ -13,13 +13,13 @@ Models, all optional and each guarded so a missing model does not fail the run:
 - doctr: docTR via python-doctr[torch]==0.10.0. PyPI "doctr" is an unrelated
   package; the real one is "python-doctr". In 0.10.0 the DocumentFile import
   works again, so images go through doctr.io as before.
-- florence2: microsoft/Florence-2-base via transformers. The remote code is
-  older than transformers 4.57, so it loads with attn_implementation="eager"
-  and trust_remote_code=True. It loads in float32, not bf16: on the CPU
-  runner bf16 weights clash with the float32 inputs. If that still fails,
-  the native port "florence-community/Florence-2-base" with
-  AutoModelForImageTextToText is the fallback. Needs einops and timm
-  installed (the workflow installs them).
+- florence2: florence-community/Florence-2-base via transformers, the native
+  port. The microsoft/Florence-2-base remote code is older than transformers
+  4.57 and leaves some layers in bfloat16, so it fails on the CPU runner
+  with a dtype mismatch even after model.float(). The native port loads
+  with AutoModelForImageTextToText and needs no trust_remote_code and no
+  attn_implementation override. Needs einops and timm installed (the
+  workflow installs them).
 - smoldocling: ds4sd/SmolDocling-256M-preview via transformers. It is an
   Idefics3 vision-language model, so it loads with AutoModelForImageTextToText,
   not AutoModelForCausalLM. The prompt must carry an image token, so it is
@@ -316,7 +316,7 @@ RUNNERS = {
 # GOT-OCR uses the native -hf repo (the plain repo has no processor class).
 # Florence-2 loads in float32, not bf16 (CPU dtype clash, see _run_hf_model).
 HF_MODELS = {
-    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm", False, True, True, 0, "fp32"),
+    "florence2": ("florence-community/Florence-2-base", "<OCR>", "image_text_to_text", False, False, False, 0, "bf16"),
     "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0, "bf16"),
     "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "OCR:", "image_text_to_text", True, False, False, 0, "bf16"),
     "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024, "bf16"),
