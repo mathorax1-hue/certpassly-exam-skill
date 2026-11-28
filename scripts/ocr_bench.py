@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""Benchmark OCR and small vision models on exam page images.
+
+Runs each available model on a set of images and writes a JSON report and a
+markdown table with words, confidence, time, peak RAM, and a structure score.
+
+Models, all optional and each guarded so a missing model does not fail the run:
+- tesseract: system Tesseract, psm 6 (primary engine).
+- rapidocr: rapidocr-onnxruntime (ONNX, fallback engine).
+- paddleocr: paddleocr 2.8.1 with paddlepaddle 2.6.2 (pin avoids the OneDNN error
+  seen with paddleocr 3.7.0 and paddlepaddle 3.3.1).
+- doctr: docTR (PyTorch).
+- florence2: microsoft/Florence-2-base via transformers.
+- smoldocling: ds4sd/SmolDocling-256M-preview via transformers.
+- gotocr: stepfun-ai/GOT-OCR2_0 via transformers.
+- qwen2vl: Qwen/Qwen2-VL-2B-Instruct via transformers, int8 or bf16 if it fits.
+
+Structure scoring. For each image the manifest names a kind. The script checks
+whether the model output contains the structural markers for that kind:
+- matrix (Yes/No grid): output contains both "Yes" and "No" (2 points), one of
+  them (1 point), or neither (0 points).
+- dropdown: output contains a selection marker. This is heuristic; the script
+  records the raw output and marks the structure as "manual" for a human to
+  score from the saved output.
+- dragdrop: output contains paired items. Heuristic; recorded as "manual".
+- hotspot: output describes a region. Heuristic; recorded as "manual".
+- low_ocr and plain: no structure check; words and confidence only.
+
+No exam text, answer keys, or image content is printed. The report holds image
+file names, sha256 prefixes, counts, confidence, time, RAM, and structure
+scores only. Raw model output text is saved to the output directory for human
+review, not printed to the log.
+
+Usage:
+    python3 scripts/ocr_bench.py --images <dir> --manifest <manifest.json> \
+        --out <outdir> [--models tesseract,rapidocr] [--limit 10]
+
+The manifest is a JSON list of {"kind": str, "question_key": str,
+"image": str, "file": str}. The images directory holds the image files named
+in the manifest. The output directory receives bench.json and bench.md, plus
+one raw output text file per model per image.
+
+Exit codes: 0 when the report is written (even if some models failed to load),
+1 on a usage error or when no image could be read.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import resource
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+# Pinned versions (Exam round 2 reply). PaddleOCR 2.8.1 with PaddlePaddle 2.6.2
+# avoids the OneDNN error seen with paddleocr 3.7.0 and paddlepaddle 3.3.1.
+# Torch and torchvision CPU wheels must come from the same index so they match.
+PINNED = {
+    "paddlepaddle": "2.6.2",
+    "paddleocr": "2.8.1",
+    "rapidocr-onnxruntime": "1.4.4",
+    "doctr": "1.9.0",
+    "transformers": "4.57.6",
+}
+
+ALL_MODELS = [
+    "tesseract",
+    "rapidocr",
+    "paddleocr",
+    "doctr",
+    "florence2",
+    "smoldocling",
+    "gotocr",
+    "qwen2vl",
+]
+
+# Image kinds and their structure checks.
+GRID_KINDS = {"matrix_q", "matrix_a", "matrix_q2"}
+DROPDOWN_KINDS = {"dropdown1", "dropdown2", "table_dropdown"}
+DRAGDROP_KINDS = {"dragdrop", "dragdrop2"}
+HOTSPOT_KINDS = {"hotspot"}
+
+
+def _sha8(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()[:8]
+
+
+def _peak_ram_mb() -> float:
+    # ru_maxrss is kilobytes on Linux.
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1)
+
+
+def _structure(kind: str, text: str) -> dict:
+    """Score structure markers for one image kind. Returns a small dict."""
+    low = text.lower()
+    if kind in GRID_KINDS:
+        has_yes = "yes" in low
+        has_no = "no" in low
+        score = int(has_yes) + int(has_no)
+        return {"check": "grid_yes_no", "score": score, "max": 2,
+                "detail": f"yes={has_yes} no={has_no}"}
+    if kind in DROPDOWN_KINDS:
+        return {"check": "dropdown_selection", "score": None, "max": None,
+                "detail": "manual: read the saved output and score the selected option"}
+    if kind in DRAGDROP_KINDS:
+        return {"check": "dragdrop_pairs", "score": None, "max": None,
+                "detail": "manual: read the saved output and score the item to slot pairs"}
+    if kind in HOTSPOT_KINDS:
+        return {"check": "hotspot_region", "score": None, "max": None,
+                "detail": "manual: read the saved output and score the hotspot region"}
+    return {"check": "none", "score": None, "max": None, "detail": "words and confidence only"}
+
+
+def _run_tesseract(image: Path) -> tuple[str, float]:
+    out = subprocess.run(
+        ["tesseract", str(image), "stdout", "--psm", "6"],
+        capture_output=True, text=True, timeout=120,
+    )
+    text = out.stdout or ""
+    # Mean word confidence from TSV output.
+    tsv = subprocess.run(
+        ["tesseract", str(image), "stdout", "--psm", "6", "tsv"],
+        capture_output=True, text=True, timeout=120,
+    )
+    confs = []
+    for line in (tsv.stdout or "").splitlines()[1:]:
+        parts = line.split("\t")
+        # TSV columns: level, page_num, block_num, par_num, line_num, word_num,
+        # left, top, width, height, conf, text. Conf is index 10, text is 11.
+        if len(parts) >= 12 and parts[10].strip():
+            try:
+                confs.append(float(parts[10]))
+            except ValueError:
+                pass
+    conf = round(sum(confs) / len(confs), 1) if confs else 0.0
+    return text, conf
+
+
+def _run_rapidocr(image: Path) -> tuple[str, float]:
+    from rapidocr_onnxruntime import RapidOCR
+
+    eng = RapidOCR()
+    result, _elapsed = eng(str(image))
+    lines = []
+    confs = []
+    for _box, txt, conf in (result or []):
+        lines.append(txt)
+        confs.append(float(conf) * 100.0)
+    text = " ".join(lines)
+    conf = round(sum(confs) / len(confs), 1) if confs else 0.0
+    return text, conf
+
+
+def _run_paddleocr(image: Path) -> tuple[str, float]:
+    from paddleocr import PaddleOCR
+
+    ocr = PaddleOCR(lang="en", use_textline_orientation=False)
+    out = ocr.predict(str(image))
+    res = out[0] if out else None
+    texts = list(getattr(res, "rec_texts", []) or [])
+    scores = list(getattr(res, "rec_scores", []) or [])
+    text = " ".join(texts)
+    conf = round(sum(scores) / len(scores) * 100.0, 1) if scores else 0.0
+    return text, conf
+
+
+def _run_doctr(image: Path) -> tuple[str, float]:
+    from doctr.io import DocumentFile
+    from doctr.models import ocr_predictor
+
+    predictor = ocr_predictor(pretrained=True)
+    doc = DocumentFile.from_images([str(image)])
+    result = predictor(doc)
+    texts = []
+    confs = []
+    for page in result.pages:
+        for block in page.blocks:
+            for line in block.lines:
+                for word in line.words:
+                    texts.append(word.value)
+                    confs.append(float(word.confidence) * 100.0)
+    text = " ".join(texts)
+    conf = round(sum(confs) / len(confs), 1) if confs else 0.0
+    return text, conf
+
+
+def _run_hf_model(model_id: str, image: Path, prompt: str) -> tuple[str, float]:
+    """Generic Hugging Face vision model runner. Returns text and 0.0 confidence
+    (these models do not report per-word confidence)."""
+    import torch
+    from PIL import Image
+    from transformers import AutoModelForCausalLM, AutoProcessor
+
+    img = Image.open(image).convert("RGB")
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, trust_remote_code=True, torch_dtype=torch.bfloat16,
+    )
+    model.eval()
+    inputs = processor(images=img, text=prompt, return_tensors="pt")
+    with torch.no_grad():
+        out = model.generate(**inputs, max_new_tokens=512)
+    text = processor.batch_decode(out, skip_special_tokens=True)[0]
+    # Strip the prompt echo if present.
+    if prompt and text.startswith(prompt):
+        text = text[len(prompt):].strip()
+    return text, 0.0
+
+
+RUNNERS = {
+    "tesseract": _run_tesseract,
+    "rapidocr": _run_rapidocr,
+    "paddleocr": _run_paddleocr,
+    "doctr": _run_doctr,
+}
+
+HF_MODELS = {
+    "florence2": ("microsoft/Florence-2-base", "<OCR>"),
+    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to markdown."),
+    "gotocr": ("stepfun-ai/GOT-OCR2_0", "OCR:"),
+    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image."),
+}
+
+
+def run_model(model: str, image: Path) -> dict:
+    """Run one model on one image. Returns a result dict, never raises."""
+    t0 = time.time()
+    ram0 = _peak_ram_mb()
+    try:
+        if model in RUNNERS:
+            text, conf = RUNNERS[model](image)
+        elif model in HF_MODELS:
+            model_id, prompt = HF_MODELS[model]
+            text, conf = _run_hf_model(model_id, image, prompt)
+        else:
+            return {"model": model, "error": f"unknown model {model}"}
+    except Exception as exc:  # noqa: BLE001 - record the failure and continue
+        return {
+            "model": model, "error": f"{type(exc).__name__}: {exc}"[:200],
+            "time_s": round(time.time() - t0, 2), "ram_peak_mb": _peak_ram_mb(),
+        }
+    dt = time.time() - t0
+    words = text.split()
+    return {
+        "model": model,
+        "words": len(words),
+        "chars": len(text),
+        "conf": conf,
+        "time_s": round(dt, 2),
+        "ram_peak_mb": max(_peak_ram_mb(), ram0),
+        "text": text,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--images", required=True, help="Directory holding the image files")
+    ap.add_argument("--manifest", required=True, help="JSON list of image entries")
+    ap.add_argument("--out", required=True, help="Output directory for bench.json and bench.md")
+    ap.add_argument("--models", default=",".join(ALL_MODELS),
+                    help="Comma-separated model names (default: all)")
+    ap.add_argument("--limit", type=int, default=0, help="Limit images (0 = all)")
+    args = ap.parse_args(argv)
+
+    images_dir = Path(args.images)
+    manifest = json.loads(Path(args.manifest).read_text())
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    bad = [m for m in models if m not in ALL_MODELS]
+    if bad:
+        print(f"unknown models: {', '.join(bad)}", file=sys.stderr)
+        return 1
+    if args.limit:
+        manifest = manifest[: args.limit]
+
+    results: list[dict] = []
+    for entry in manifest:
+        kind = entry.get("kind", "")
+        qkey = entry.get("question_key", "")
+        image_name = entry.get("image", "")
+        rel = entry.get("file", image_name)
+        image = images_dir / Path(rel).name if not Path(rel).is_absolute() else Path(rel)
+        if not image.exists():
+            image = images_dir / image_name
+        if not image.exists():
+            print(f"skip {kind}: image not found: {image}", file=sys.stderr)
+            continue
+        sha = _sha8(image)
+        size = image.stat().st_size
+        row = {
+            "kind": kind, "question_key": qkey, "image": image_name,
+            "sha256_8": sha, "bytes": size, "models": {},
+        }
+        for model in models:
+            res = run_model(model, image)
+            text = res.pop("text", "")
+            # Save raw output for human structure review, not printed.
+            raw_path = outdir / f"{kind}_{model}.txt"
+            raw_path.write_text(text, encoding="utf-8")
+            res["structure"] = _structure(kind, text)
+            row["models"][model] = res
+            status = "error" if "error" in res else f"{res.get('words', 0)} words"
+            print(f"{kind:15s} {model:10s} {status}")
+        results.append(row)
+
+    if not results:
+        print("no images were read", file=sys.stderr)
+        return 1
+
+    bench = {
+        "images": len(results),
+        "models": models,
+        "pinned": PINNED,
+        "results": results,
+    }
+    (outdir / "bench.json").write_text(json.dumps(bench, indent=2), encoding="utf-8")
+
+    # Markdown table.
+    lines = [
+        "# OCR bench results",
+        "",
+        "Models: " + ", ".join(models) + ".",
+        "Pinned: " + ", ".join(f"{k} {v}" for k, v in PINNED.items()) + ".",
+        "",
+        "| Kind | Question | Image | Sha256 | Model | Words | Conf | Time (s) | RAM peak (MB) | Structure |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in results:
+        for model in models:
+            r = row["models"].get(model, {})
+            if "error" in r:
+                lines.append(
+                    f"| {row['kind']} | {row['question_key']} | {row['image']} | "
+                    f"{row['sha256_8']} | {model} | error | - | {r.get('time_s', '-')} | "
+                    f"{r.get('ram_peak_mb', '-')} | {r.get('error', '')[:60]} |"
+                )
+            else:
+                st = r.get("structure", {})
+                struct = st.get("detail", "")
+                if st.get("max"):
+                    struct = f"{st.get('score')}/{st.get('max')} {struct}"
+                lines.append(
+                    f"| {row['kind']} | {row['question_key']} | {row['image']} | "
+                    f"{row['sha256_8']} | {model} | {r.get('words', 0)} | {r.get('conf', 0)} | "
+                    f"{r.get('time_s', 0)} | {r.get('ram_peak_mb', 0)} | {struct} |"
+                )
+    (outdir / "bench.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"wrote {outdir / 'bench.json'} and {outdir / 'bench.md'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

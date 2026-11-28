@@ -251,6 +251,17 @@
       "owner": "CertPassly Team",
       "scope": "shared",
       "release_authority": false
+    },
+    {
+      "id": "ocr_bench",
+      "path": "scripts/ocr_bench.py",
+      "test": "tests/test_ocr_bench.py",
+      "command": "python scripts/ocr_bench.py --images <dir> --manifest <manifest.json> --out <outdir> [--models tesseract,rapidocr]",
+      "dependencies": "tesseract (system); rapidocr-onnxruntime 1.4.4; paddlepaddle 2.6.2 + paddleocr 2.8.1 (optional); doctr 1.9.0 (optional); transformers 4.57.6 + torch 2.5.1+cpu + torchvision 0.20.1+cpu (optional, for HF vision models)",
+      "side_effects": "writes bench.json, bench.md and one raw output text file per model per image to the output directory; reads only the images and manifest given",
+      "owner": "CertPassly Team",
+      "scope": "shared",
+      "release_authority": false
     }
   ]
 }
