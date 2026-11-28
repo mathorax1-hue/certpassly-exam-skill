@@ -142,7 +142,14 @@ class _FakeProcessor:
 
 
 class _FakeModel:
+    floated = False
+
     def eval(self):
+        return self
+
+    def float(self):
+        # Mirrors torch nn.Module.float(): converts all weights to float32.
+        _FakeModel.floated = True
         return self
 
     def generate(self, **inputs):
@@ -185,28 +192,36 @@ def _install_fake_hf(monkeypatch) -> _FakeProcessor:
 
 def test_florence2_loads_in_float32(monkeypatch, tmp_path: Path) -> None:
     """Florence-2 must load in float32: bf16 weights clash with the float32
-    inputs on the CPU runner (RuntimeError in run 46131887562)."""
+    inputs on the CPU runner (RuntimeError in run 46131887562). Passing
+    torch_dtype alone does not fix it, because the remote code leaves some
+    layers in bf16, so the runner must also call model.float()."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
+    _FakeModel.floated = False
     model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["florence2"]
     assert dtype == "fp32"
     text, _conf = ocr_bench._run_hf_model(
         model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
     assert proc.load_kwargs.get("torch_dtype") == "float32"
     assert proc.load_kwargs.get("attn_implementation") == "eager"
+    assert _FakeModel.floated is True
     assert text == "decoded-7"
 
 
-def test_gotocr_calls_processor_without_text(monkeypatch, tmp_path: Path) -> None:
-    """GOT-OCR's native processor builds its own query with image tokens;
-    passing text would drop them, so the runner must call it images-only."""
+def test_gotocr_uses_chat_template(monkeypatch, tmp_path: Path) -> None:
+    """GOT-OCR-2.0-hf is an image-text-to-text model, so it needs the chat
+    template with an image item, like SmolDocling and Qwen2-VL. Calling the
+    processor images-only gives 0 image tokens (ValueError in run
+    46131887562), so the runner must build the prompt with
+    apply_chat_template and pass the image item."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
     model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["gotocr"]
-    assert prompt == ""
+    assert chat is True
+    assert prompt == "OCR:"
     text, _conf = ocr_bench._run_hf_model(
         model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
-    assert proc.calls and proc.calls[0]["text"] is None
+    assert proc.calls and (proc.calls[0]["text"] or "").startswith("CHAT:")
     assert text == "decoded-7"
 
 
