@@ -25,7 +25,9 @@ Models, all optional and each guarded so a missing model does not fail the run:
 - gotocr: stepfun-ai/GOT-OCR-2.0-hf via transformers. The plain
   stepfun-ai/GOT-OCR2_0 repo is remote-code only and has no processor class,
   so the native -hf repo is used with AutoProcessor and
-  AutoModelForImageTextToText (no trust_remote_code). Needs verovio installed
+  AutoModelForImageTextToText (no trust_remote_code). The prompt is empty on
+  purpose: the native processor builds its own default OCR query with the
+  image tokens, and passing text would drop them. Needs verovio installed
   (the workflow installs it).
 - qwen2vl: Qwen/Qwen2-VL-2B-Instruct via transformers, bf16 if it fits. It is
   a vision-language model, so it loads with AutoModelForImageTextToText.
@@ -263,11 +265,21 @@ def _run_hf_model(model_id: str, image: Path, prompt: str,
         text_in = processor.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False)
         inputs = processor(images=[img], text=text_in, return_tensors="pt")
-    else:
+    elif prompt:
         inputs = processor(images=img, text=prompt, return_tensors="pt")
+    else:
+        # No text prompt: the processor builds its own default query (GOT-OCR
+        # needs this, its default query carries the image tokens; passing a
+        # plain text prompt would drop them).
+        inputs = processor(images=img, return_tensors="pt")
+    prompt_len = inputs["input_ids"].shape[1]
     with torch.no_grad():
         out = model.generate(**inputs, max_new_tokens=512)
-    text = processor.batch_decode(out, skip_special_tokens=True)[0]
+    # Decode only the generated tokens, not the prompt echo. The prompt is
+    # the chat-formatted text for chat-template models and the processor's
+    # own query for GOT-OCR, so a string prefix strip would not match it.
+    gen = out[:, prompt_len:] if out.shape[1] > prompt_len else out
+    text = processor.batch_decode(gen, skip_special_tokens=True)[0]
     # Strip the prompt echo if present.
     if prompt and text.startswith(prompt):
         text = text[len(prompt):].strip()
@@ -290,7 +302,7 @@ RUNNERS = {
 HF_MODELS = {
     "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm", False, True, True, 0),
     "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0),
-    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "OCR:", "image_text_to_text", False, False, False, 0),
+    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "", "image_text_to_text", False, False, False, 0),
     "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024),
 }
 

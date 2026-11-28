@@ -89,3 +89,117 @@ def test_missing_image_returns_one(tmp_path: Path) -> None:
         "--out", str(tmp_path / "out"), "--models", "tesseract",
     ])
     assert rc == 1
+
+
+# --- Fake transformers/torch for the HF runner (no download, no model). ---
+
+class _FakeTensor:
+    """Minimal stand-in for a torch tensor: shape and [:, n:] slicing."""
+
+    def __init__(self, length: int) -> None:
+        self.shape = (1, length)
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            sl = key[1]
+            start = sl.start or 0
+            return _FakeTensor(self.shape[1] - start)
+        return self
+
+
+class _FakeNoGrad:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeTorch:
+    bfloat16 = "bfloat16"
+
+    def no_grad(self):
+        return _FakeNoGrad()
+
+
+class _FakeProcessor:
+    calls: list = []
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def apply_chat_template(self, messages, add_generation_prompt=True, tokenize=False):
+        return "CHAT:" + messages[0]["content"][1]["text"]
+
+    def __call__(self, images=None, text=None, return_tensors=None):
+        self.calls.append({"images": images is not None, "text": text})
+        # Chat text is longer than a plain prompt; plain prompt is short.
+        length = 12 if (text or "").startswith("CHAT:") else 4
+        return {"input_ids": _FakeTensor(length)}
+
+    def batch_decode(self, ids, skip_special_tokens=True):
+        return [f"decoded-{ids.shape[1]}"]
+
+
+class _FakeModel:
+    def eval(self):
+        return self
+
+    def generate(self, **inputs):
+        prompt_len = inputs["input_ids"].shape[1]
+        return _FakeTensor(prompt_len + 7)
+
+
+def _install_fake_hf(monkeypatch) -> _FakeProcessor:
+    import sys
+    import types
+
+    proc = _FakeProcessor()
+    fake_torch = types.ModuleType("torch")
+    fake_torch.bfloat16 = "bfloat16"
+    fake_torch.no_grad = _FakeNoGrad
+    fake_tr = types.ModuleType("transformers")
+
+    class _Auto:
+        @staticmethod
+        def from_pretrained(model_id, **kwargs):
+            return _FakeModel()
+
+    fake_tr.AutoModelForCausalLM = _Auto
+    fake_tr.AutoModelForImageTextToText = _Auto
+
+    class _AutoProc:
+        @staticmethod
+        def from_pretrained(model_id, **kwargs):
+            return proc
+
+    fake_tr.AutoProcessor = _AutoProc
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", fake_tr)
+    return proc
+
+
+def test_gotocr_calls_processor_without_text(monkeypatch, tmp_path: Path) -> None:
+    """GOT-OCR's native processor builds its own query with image tokens;
+    passing text would drop them, so the runner must call it images-only."""
+    proc = _install_fake_hf(monkeypatch)
+    _make_image(tmp_path / "grid.png")
+    model_id, prompt, model_class, chat, eager, remote, side = ocr_bench.HF_MODELS["gotocr"]
+    assert prompt == ""
+    text, _conf = ocr_bench._run_hf_model(
+        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side)
+    assert proc.calls and proc.calls[0]["text"] is None
+    assert text == "decoded-7"
+
+
+def test_chat_template_decodes_generated_tokens_only(monkeypatch, tmp_path: Path) -> None:
+    """Chat-template models must decode only the generated tokens, not the
+    chat-formatted prompt echo, or word counts are inflated."""
+    proc = _install_fake_hf(monkeypatch)
+    _make_image(tmp_path / "grid.png")
+    model_id, prompt, model_class, chat, eager, remote, side = ocr_bench.HF_MODELS["smoldocling"]
+    assert chat is True
+    text, _conf = ocr_bench._run_hf_model(
+        model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side)
+    assert proc.calls and (proc.calls[0]["text"] or "").startswith("CHAT:")
+    assert text == "decoded-7"
