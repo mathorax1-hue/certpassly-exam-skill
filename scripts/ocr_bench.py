@@ -10,17 +10,28 @@ Models, all optional and each guarded so a missing model does not fail the run:
 - paddleocr: paddleocr 2.8.1 with paddlepaddle 2.6.2 (pin avoids the OneDNN error
   seen with paddleocr 3.7.0 and paddlepaddle 3.3.1). Uses the 2.x ocr() API;
   predict() is a 3.x addition and does not exist in 2.8.1.
-- doctr: docTR 1.9.0 (PyTorch). doctr.io was removed in 1.9.0, so images are
-  passed as numpy arrays, not through DocumentFile.
-- florence2: microsoft/Florence-2-base via transformers. Needs einops and timm
-  installed (the workflow installs them).
+- doctr: docTR via python-doctr[torch]==0.10.0. PyPI "doctr" is an unrelated
+  package; the real one is "python-doctr". In 0.10.0 the DocumentFile import
+  works again, so images go through doctr.io as before.
+- florence2: microsoft/Florence-2-base via transformers. The remote code is
+  older than transformers 4.57, so it loads with attn_implementation="eager"
+  and trust_remote_code=True. If that still fails, the native port
+  "florence-community/Florence-2-base" with AutoModelForImageTextToText is
+  the fallback. Needs einops and timm installed (the workflow installs them).
 - smoldocling: ds4sd/SmolDocling-256M-preview via transformers. It is an
   Idefics3 vision-language model, so it loads with AutoModelForImageTextToText,
-  not AutoModelForCausalLM.
-- gotocr: stepfun-ai/GOT-OCR2_0 via transformers. Needs verovio installed
+  not AutoModelForCausalLM. The prompt must carry an image token, so it is
+  built with processor.apply_chat_template and an {"type": "image"} item.
+- gotocr: stepfun-ai/GOT-OCR-2.0-hf via transformers. The plain
+  stepfun-ai/GOT-OCR2_0 repo is remote-code only and has no processor class,
+  so the native -hf repo is used with AutoProcessor and
+  AutoModelForImageTextToText (no trust_remote_code). Needs verovio installed
   (the workflow installs it).
 - qwen2vl: Qwen/Qwen2-VL-2B-Instruct via transformers, bf16 if it fits. It is
   a vision-language model, so it loads with AutoModelForImageTextToText.
+  The prompt must carry an image token, so it is built with
+  processor.apply_chat_template and an {"type": "image"} item. Images are
+  resized so the long side is at most 1024 to save RAM.
   The workflow also installs accelerate and qwen-vl-utils.
 
 Structure scoring. For each image the manifest names a kind. The script checks
@@ -63,14 +74,17 @@ import sys
 import time
 from pathlib import Path
 
-# Pinned versions (Exam round 2 reply). PaddleOCR 2.8.1 with PaddlePaddle 2.6.2
-# avoids the OneDNN error seen with paddleocr 3.7.0 and paddlepaddle 3.3.1.
-# Torch and torchvision CPU wheels must come from the same index so they match.
+# Pinned versions (Exam round 2 reply, updated with Exam's fixes). PaddleOCR
+# 2.8.1 with PaddlePaddle 2.6.2 avoids the OneDNN error seen with paddleocr
+# 3.7.0 and paddlepaddle 3.3.1. Torch and torchvision CPU wheels must come
+# from the same index so they match. docTR is the real python-doctr package
+# (PyPI "doctr" is unrelated); the workflow installs
+# python-doctr[torch]==0.10.0.
 PINNED = {
     "paddlepaddle": "2.6.2",
     "paddleocr": "2.8.1",
     "rapidocr-onnxruntime": "1.4.4",
-    "doctr": "1.9.0",
+    "python-doctr": "0.10.0",
     "transformers": "4.57.6",
 }
 
@@ -186,16 +200,14 @@ def _run_paddleocr(image: Path) -> tuple[str, float]:
 
 
 def _run_doctr(image: Path) -> tuple[str, float]:
-    # docTR 1.9.0 has no doctr.io module (DocumentFile was removed).
-    # Load the image with PIL and pass a numpy array to the predictor,
-    # which accepts a list of images directly.
-    import numpy as np
-    from PIL import Image
+    # The real docTR package is python-doctr (PyPI "doctr" is unrelated).
+    # The workflow installs python-doctr[torch]==0.10.0, which has doctr.io.
+    from doctr.io import DocumentFile
     from doctr.models import ocr_predictor
 
     predictor = ocr_predictor(pretrained=True)
-    arr = np.array(Image.open(image).convert("RGB"))
-    result = predictor([arr])
+    doc = DocumentFile.from_images([str(image)])
+    result = predictor(doc)
     texts = []
     confs = []
     for page in result.pages:
@@ -210,24 +222,49 @@ def _run_doctr(image: Path) -> tuple[str, float]:
 
 
 def _run_hf_model(model_id: str, image: Path, prompt: str,
-                  model_class: str = "causal_lm") -> tuple[str, float]:
+                  model_class: str = "causal_lm",
+                  chat_template: bool = False,
+                  attn_eager: bool = False,
+                  trust_remote: bool = True,
+                  max_side: int = 0) -> tuple[str, float]:
     """Generic Hugging Face vision model runner. Returns text and 0.0 confidence
     (these models do not report per-word confidence).
     model_class is "causal_lm" (Florence-2, GOT-OCR) or "image_text_to_text"
     (SmolDocling and Qwen2-VL, which are vision-language models whose config
-    AutoModelForCausalLM does not recognise)."""
+    AutoModelForCausalLM does not recognise). chat_template builds the prompt
+    with processor.apply_chat_template and an image item, which SmolDocling
+    and Qwen2-VL need so the image token count matches the image count.
+    attn_eager loads with attn_implementation="eager" (Florence-2 remote code
+    is older than transformers 4.57 and has no _supports_sdpa). max_side
+    resizes the image so its long side is at most that many pixels."""
     import torch
     from PIL import Image
     from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
 
     img = Image.open(image).convert("RGB")
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    if max_side and max(img.size) > max_side:
+        scale = max_side / max(img.size)
+        img = img.resize((int(img.size[0] * scale), int(img.size[1] * scale)))
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote)
     cls = AutoModelForImageTextToText if model_class == "image_text_to_text" else AutoModelForCausalLM
-    model = cls.from_pretrained(
-        model_id, trust_remote_code=True, torch_dtype=torch.bfloat16,
-    )
+    kwargs = {"trust_remote_code": trust_remote, "torch_dtype": torch.bfloat16}
+    if attn_eager:
+        kwargs["attn_implementation"] = "eager"
+    model = cls.from_pretrained(model_id, **kwargs)
     model.eval()
-    inputs = processor(images=img, text=prompt, return_tensors="pt")
+    if chat_template:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        text_in = processor.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False)
+        inputs = processor(images=[img], text=text_in, return_tensors="pt")
+    else:
+        inputs = processor(images=img, text=prompt, return_tensors="pt")
     with torch.no_grad():
         out = model.generate(**inputs, max_new_tokens=512)
     text = processor.batch_decode(out, skip_special_tokens=True)[0]
@@ -244,14 +281,17 @@ RUNNERS = {
     "doctr": _run_doctr,
 }
 
-# (model id, prompt, model class). Florence-2 and GOT-OCR load as a causal LM.
-# SmolDocling (Idefics3) and Qwen2-VL load as an image-text-to-text model;
-# AutoModelForCausalLM does not recognise their config class.
+# (model id, prompt, model class, chat_template, attn_eager, trust_remote,
+#  max_side). Florence-2 and GOT-OCR load as a causal LM. SmolDocling
+# (Idefics3) and Qwen2-VL load as an image-text-to-text model; AutoModelFor-
+# CausalLM does not recognise their config class. SmolDocling and Qwen2-VL
+# need the chat template so the image token is present. GOT-OCR uses the
+# native -hf repo (the plain repo has no processor class).
 HF_MODELS = {
-    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm"),
-    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to markdown.", "image_text_to_text"),
-    "gotocr": ("stepfun-ai/GOT-OCR2_0", "OCR:", "causal_lm"),
-    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text"),
+    "florence2": ("microsoft/Florence-2-base", "<OCR>", "causal_lm", False, True, True, 0),
+    "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0),
+    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "OCR:", "image_text_to_text", False, False, False, 0),
+    "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024),
 }
 
 
@@ -263,8 +303,9 @@ def run_model(model: str, image: Path) -> dict:
         if model in RUNNERS:
             text, conf = RUNNERS[model](image)
         elif model in HF_MODELS:
-            model_id, prompt, model_class = HF_MODELS[model]
-            text, conf = _run_hf_model(model_id, image, prompt, model_class)
+            model_id, prompt, model_class, chat_template, attn_eager, trust_remote, max_side = HF_MODELS[model]
+            text, conf = _run_hf_model(model_id, image, prompt, model_class,
+                                       chat_template, attn_eager, trust_remote, max_side)
         else:
             return {"model": model, "error": f"unknown model {model}"}
     except Exception as exc:  # noqa: BLE001 - record the failure and continue
