@@ -310,15 +310,19 @@ RUNNERS = {
 # (model id, prompt, model class, chat_template, attn_eager, trust_remote,
 #  max_side, dtype). Florence-2 and GOT-OCR load as a causal LM. SmolDocling
 # (Idefics3) and Qwen2-VL load as an image-text-to-text model; AutoModelFor-
-# CausalLM does not recognise their config class. SmolDocling, Qwen2-VL and
-# GOT-OCR need the chat template so the image token is present. Calling the
-# GOT-OCR processor images-only gives 0 image tokens (run 46131887562).
-# GOT-OCR uses the native -hf repo (the plain repo has no processor class).
+# CausalLM does not recognise their config class. SmolDocling and Qwen2-VL
+# need the chat template so the image token is present. GOT-OCR does NOT use
+# the chat template: its processor has no chat template, so apply_chat_template
+# fails (run 46134627812). GOT-OCR uses the images-only call with an empty
+# prompt, and the native processor builds its own default OCR query with the
+# image tokens (run 46133244718, 10/10). The 0-token failure was with the old
+# m-a-p repo, not with images-only. GOT-OCR uses the native -hf repo (the
+# plain repo has no processor class).
 # Florence-2 loads in float32, not bf16 (CPU dtype clash, see _run_hf_model).
 HF_MODELS = {
     "florence2": ("florence-community/Florence-2-base", "<OCR>", "image_text_to_text", False, False, False, 0, "bf16"),
     "smoldocling": ("ds4sd/SmolDocling-256M-preview", "Convert this page to docling.", "image_text_to_text", True, False, True, 0, "bf16"),
-    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "OCR:", "image_text_to_text", True, False, False, 0, "bf16"),
+    "gotocr": ("stepfun-ai/GOT-OCR-2.0-hf", "", "image_text_to_text", False, False, False, 0, "bf16"),
     "qwen2vl": ("Qwen/Qwen2-VL-2B-Instruct", "Read all text in this image.", "image_text_to_text", True, False, True, 1024, "bf16"),
 }
 

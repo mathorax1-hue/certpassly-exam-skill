@@ -212,20 +212,21 @@ def test_florence2_uses_native_port(monkeypatch, tmp_path: Path) -> None:
     assert text == "decoded-7"
 
 
-def test_gotocr_uses_chat_template(monkeypatch, tmp_path: Path) -> None:
-    """GOT-OCR-2.0-hf is an image-text-to-text model, so it needs the chat
-    template with an image item, like SmolDocling and Qwen2-VL. Calling the
-    processor images-only gives 0 image tokens (ValueError in run
-    46131887562), so the runner must build the prompt with
-    apply_chat_template and pass the image item."""
+def test_gotocr_uses_images_only(monkeypatch, tmp_path: Path) -> None:
+    """GOT-OCR-2.0-hf must use the images-only call, not the chat template.
+    Its processor has no chat template, so apply_chat_template fails
+    (ValueError in run 46134627812). The images-only call with an empty
+    prompt works: the native processor builds its own default OCR query
+    with the image tokens (run 46133244718, 10/10). The 0-token failure
+    was with the old m-a-p repo, not with images-only."""
     proc = _install_fake_hf(monkeypatch)
     _make_image(tmp_path / "grid.png")
     model_id, prompt, model_class, chat, eager, remote, side, dtype = ocr_bench.HF_MODELS["gotocr"]
-    assert chat is True
-    assert prompt == "OCR:"
+    assert chat is False
+    assert prompt == ""
     text, _conf = ocr_bench._run_hf_model(
         model_id, tmp_path / "grid.png", prompt, model_class, chat, eager, remote, side, dtype)
-    assert proc.calls and (proc.calls[0]["text"] or "").startswith("CHAT:")
+    assert proc.calls and proc.calls[0].get("text") is None
     assert text == "decoded-7"
 
 
